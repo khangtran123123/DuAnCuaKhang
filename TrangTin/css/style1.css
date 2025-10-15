@@ -1,0 +1,201 @@
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+}
+
+a{
+	text-decoration:none;
+	color:black;
+}
+
+a:hover{
+	color:red;
+}
+
+#TrangWeb {
+	width: 1200px;
+	margin: 0 auto;
+	border: 1px solid #000000;
+
+}
+
+#PhanDau {
+	width: 1200px;
+	height: 200px;
+		
+}
+#PhanMenu1{
+	width: 1200px;
+	height: 50px;
+	clear: both;
+	background-color:aqua;
+}
+
+
+
+.Menu{
+    
+    float: left;
+	width:105px;
+    padding: 9px;
+    color: black;
+	text-align:center;
+	height: 22px;
+	font-size:20px;
+}
+.Menu1{
+    
+    float: left;
+	width:340px;
+    padding: 9px;
+    color: black;
+	text-align:center;
+	height: 22px;
+	font-size:20px;
+}
+
+#Giua {
+	width: 1200px;
+	float: left;
+		
+}
+
+#PhanGiua {
+	width: 960px;
+	float:left;
+}}
+
+#PhanGiua::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+
+#BenTrai {
+	width: 240px;
+	float: left;
+	clear;both;
+}
+
+.khungsanpham {
+	width: 320px;
+	margin: 0px;
+	height: 390px;
+	float: left;
+	text-align: center;
+	border: 1px solid transparent;
+}
+.khungsanpham:hover {
+
+    border: 1px solid #33CCFF; /* chỉ hiện viền khi hover */
+}
+
+
+.khunganh {
+	width: 320px;
+	margin: 0px; 
+
+}
+
+.khungtext {
+	width: 320px;
+	margin: 0px; 
+	text-align: center;
+}
+
+
+
+#PhanCuoi {
+	width: 1200px;
+	clear: both;
+	height: 100px;
+	background: #1e90ff;	
+	
+	height: 120px;
+	font-size: 15px;
+	border: 1px solid blue;
+	color: white;
+}
+
+#PhanCuoi table{
+	margin-left: 10px;
+}
+
+input[type="submit"] {
+    background-color: black;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+
+}
+input[type="submit"]:hover {
+    background-color: #00FF00;
+	color:red;
+}
+
+
+.thanhtoan{
+	text-align:center;
+}
+
+
+span.requirefield {
+	color: #FF0000;
+	font-size: 12px;
+}
+
+span.luotxem{
+	color: blue;
+	font-size: 16px;
+	
+}
+span.dongia{
+	color: #FF0000;
+	font-size: 20px;
+	font-weight: bold;
+	border-radius: 5px;
+	background: yellow;
+	text-decoration: line-through;
+	
+}
+span.giaban{
+	color: #FF0000;
+	font-size: 20px;
+	font-weight: bold;
+	border-radius: 5px;
+	background: yellow;	
+	
+}
+
+#TieuDeTB{
+    font-weight: bold;
+    
+}
+.TBCuoiTrang{
+	margin:10px;
+    width: 1200px;
+    height: 50px;
+}
+
+
+.filter-container {
+    width: 200px;
+    border: 1px solid aqua;
+    padding: 15px;
+    border-radius: 8px;
+    font-family: Arial, sans-serif;
+    background-color: #fff;
+}
+
+.filter {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+
+
