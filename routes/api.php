@@ -24,7 +24,6 @@ Route::post('bookings/{maHD}/rooms/{maPhong}/cancel', [BookingController::class,
 Route::post('bookings/{maHD}/confirm-payment', [BookingController::class, 'confirmPayment']);
 Route::get('bookings/{maHD}/payment-status', [BookingController::class, 'paymentStatus']);
 Route::post('webhooks/bank-transfer', [BookingController::class, 'bankTransferWebhook']);
-Route::post('webhooks/zalopay', [BookingController::class, 'zaloPayWebhook']);
 
 // Combo Booking (Tour + Room)
 Route::post('combo-bookings', [ComboBookingController::class, 'bookCombo']);

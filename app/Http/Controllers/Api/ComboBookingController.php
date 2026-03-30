@@ -14,8 +14,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -136,9 +134,6 @@ class ComboBookingController extends Controller
                 ]);
 
                 $transferDesc = $this->buildTransferDescription((int) $invoice->MaHD);
-                $onlinePaymentData = $isOnlinePayment
-                    ? $this->buildOnlinePaymentData($comboTotal, (int) $invoice->MaHD, $transferDesc)
-                    : null;
 
                 return [
                     'invoice'      => $invoice->fresh(),
@@ -151,11 +146,9 @@ class ComboBookingController extends Controller
                     ],
                     'payment_method'       => $paymentMethod,
                     'payment_method_label' => $isOnlinePayment ? 'Chuyển khoản' : 'Thanh toán tại quầy',
-                    'payment_provider' => $onlinePaymentData['payment_provider'] ?? null,
-                    'payment_meta' => $onlinePaymentData['payment_meta'] ?? null,
-                    'qr_payload'   => $onlinePaymentData['qr_payload'] ?? null,
-                    'qr_code_url'  => $onlinePaymentData['qr_code_url'] ?? null,
-                    'bank_info'    => $onlinePaymentData['bank_info'] ?? null,
+                    'qr_payload'   => $isOnlinePayment ? $transferDesc : null,
+                    'qr_code_url'  => $isOnlinePayment ? $this->buildVietQrUrl($comboTotal, $transferDesc) : null,
+                    'bank_info'    => $isOnlinePayment ? $this->getBankInfo() : null,
                 ];
             });
 
@@ -169,8 +162,6 @@ class ComboBookingController extends Controller
                     'pricing'      => $result['pricing'],
                     'payment_method'       => $result['payment_method'],
                     'payment_method_label' => $result['payment_method_label'],
-                    'payment_provider' => $result['payment_provider'] ?? null,
-                    'payment_meta' => $result['payment_meta'] ?? null,
                     'qr_payload'   => $result['qr_payload'],
                     'qr_code_url'  => $result['qr_code_url'],
                     'bank_info'    => $result['bank_info'],
@@ -363,118 +354,6 @@ class ComboBookingController extends Controller
             'bank_id'      => env('HOTEL_BANK_ID', 'MB'),
             'account_no'   => env('HOTEL_ACCOUNT_NO', ''),
             'account_name' => env('HOTEL_ACCOUNT_NAME', 'KHACH SAN'),
-        ];
-    }
-
-    private function buildOnlinePaymentData(float $amount, int $invoiceId, string $transferDesc): array
-    {
-        try {
-            $zaloData = $this->createZaloPayOrder($amount, $invoiceId);
-            if ($zaloData !== null) {
-                return $zaloData;
-            }
-        } catch (Throwable $e) {
-            Log::warning('zalopay_create_order_failed_combo', [
-                'invoice_id' => $invoiceId,
-                'message' => $e->getMessage(),
-            ]);
-        }
-
-        return [
-            'payment_provider' => 'vietqr',
-            'payment_meta' => null,
-            'qr_payload' => $transferDesc,
-            'qr_code_url' => $this->buildVietQrUrl($amount, $transferDesc),
-            'bank_info' => $this->getBankInfo(),
-        ];
-    }
-
-    private function createZaloPayOrder(float $amount, int $invoiceId): ?array
-    {
-        $enabled = filter_var(config('services.zalopay.enabled', false), FILTER_VALIDATE_BOOL);
-        $appId = trim((string) config('services.zalopay.app_id', ''));
-        $key1 = trim((string) config('services.zalopay.key1', ''));
-        $createEndpoint = trim((string) config('services.zalopay.create_endpoint', ''));
-
-        if (!$enabled || $appId === '' || $key1 === '' || $createEndpoint === '') {
-            return null;
-        }
-
-        $amountInt = (int) round($amount, 0);
-        if ($amountInt <= 0) {
-            return null;
-        }
-
-        $appTransId = now()->format('ymd') . '_' . $invoiceId . '_' . random_int(100000, 999999);
-        $appTime = (int) round(microtime(true) * 1000);
-        $callbackUrl = trim((string) config('services.zalopay.callback_url', ''));
-        if ($callbackUrl === '') {
-            $callbackUrl = rtrim((string) config('app.url'), '/') . '/api/webhooks/zalopay';
-        }
-
-        $embedData = json_encode([
-            'invoice_id' => $invoiceId,
-            'redirect_url' => trim((string) config('services.zalopay.redirect_url', '')),
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $item = '[]';
-
-        $orderData = [
-            'app_id' => $appId,
-            'app_user' => 'invoice_' . $invoiceId,
-            'app_time' => $appTime,
-            'amount' => $amountInt,
-            'app_trans_id' => $appTransId,
-            'embed_data' => $embedData,
-            'item' => $item,
-            'description' => 'Thanh toan hoa don ' . $invoiceId,
-            'bank_code' => trim((string) config('services.zalopay.bank_code', '')),
-            'callback_url' => $callbackUrl,
-        ];
-
-        $dataToSign = implode('|', [
-            $orderData['app_id'],
-            $orderData['app_trans_id'],
-            $orderData['app_user'],
-            $orderData['amount'],
-            $orderData['app_time'],
-            $orderData['embed_data'],
-            $orderData['item'],
-        ]);
-        $orderData['mac'] = hash_hmac('sha256', $dataToSign, $key1);
-
-        $response = Http::asForm()->timeout(20)->post($createEndpoint, $orderData);
-        if (!$response->successful()) {
-            throw new \RuntimeException('ZaloPay HTTP ' . $response->status());
-        }
-
-        $payload = $response->json();
-        if (!is_array($payload)) {
-            throw new \RuntimeException('Invalid ZaloPay response payload');
-        }
-
-        if ((int) ($payload['return_code'] ?? -1) !== 1) {
-            throw new \RuntimeException((string) ($payload['return_message'] ?? 'ZaloPay create order failed'));
-        }
-
-        $paymentUrl = (string) ($payload['order_url'] ?? $payload['orderurl'] ?? '');
-        $zpToken = (string) ($payload['zp_trans_token'] ?? '');
-        if ($paymentUrl === '' && $zpToken !== '') {
-            $paymentUrl = 'https://sbgateway.zalopay.vn/openinapp?order=' . urlencode($zpToken);
-        }
-        if ($paymentUrl === '') {
-            throw new \RuntimeException('Missing order_url from ZaloPay response');
-        }
-
-        return [
-            'payment_provider' => 'zalopay',
-            'payment_meta' => [
-                'app_trans_id' => $appTransId,
-                'zp_trans_token' => $zpToken,
-                'order_url' => $paymentUrl,
-            ],
-            'qr_payload' => $paymentUrl,
-            'qr_code_url' => 'https://quickchart.io/qr?size=280&text=' . urlencode($paymentUrl),
-            'bank_info' => null,
         ];
     }
 

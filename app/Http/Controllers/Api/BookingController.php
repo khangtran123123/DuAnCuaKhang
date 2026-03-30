@@ -14,7 +14,6 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Throwable;
@@ -126,9 +125,6 @@ class BookingController extends Controller
 
                     $freshInvoice = $existingInvoice->fresh()->load('rooms.room.type');
                     $transferDesc = $this->buildTransferDescription((int) $freshInvoice->MaHD);
-                    $onlinePaymentData = $isOnlinePayment
-                        ? $this->buildOnlinePaymentData((float) $freshInvoice->ThanhTien, (int) $freshInvoice->MaHD, $transferDesc)
-                        : null;
 
                     return [
                         'invoice' => $freshInvoice,
@@ -140,11 +136,9 @@ class BookingController extends Controller
                         ],
                         'payment_method' => $paymentMethod,
                         'payment_method_label' => $isOnlinePayment ? 'Thanh toán trực tuyến' : 'Thanh toán tại quầy',
-                        'payment_provider' => $onlinePaymentData['payment_provider'] ?? null,
-                        'payment_meta' => $onlinePaymentData['payment_meta'] ?? null,
-                        'qr_payload' => $onlinePaymentData['qr_payload'] ?? null,
-                        'qr_code_url' => $onlinePaymentData['qr_code_url'] ?? null,
-                        'bank_info' => $onlinePaymentData['bank_info'] ?? null,
+                        'qr_payload' => $isOnlinePayment ? $transferDesc : null,
+                        'qr_code_url' => $isOnlinePayment ? $this->buildVietQrUrl((float) $freshInvoice->ThanhTien, $transferDesc) : null,
+                        'bank_info' => $isOnlinePayment ? $this->getBankInfo() : null,
                         'reused_invoice' => true,
                     ];
                 }
@@ -169,9 +163,6 @@ class BookingController extends Controller
 
                 $invoice = $invoice->fresh()->load('rooms.room.type');
                 $transferDesc = $this->buildTransferDescription((int) $invoice->MaHD);
-                $onlinePaymentData = $isOnlinePayment
-                    ? $this->buildOnlinePaymentData($calculatedTotal, (int) $invoice->MaHD, $transferDesc)
-                    : null;
 
                 return [
                     'invoice' => $invoice,
@@ -183,11 +174,9 @@ class BookingController extends Controller
                     ],
                     'payment_method' => $paymentMethod,
                     'payment_method_label' => $isOnlinePayment ? 'Thanh toán trực tuyến' : 'Thanh toán tại quầy',
-                    'payment_provider' => $onlinePaymentData['payment_provider'] ?? null,
-                    'payment_meta' => $onlinePaymentData['payment_meta'] ?? null,
-                    'qr_payload' => $onlinePaymentData['qr_payload'] ?? null,
-                    'qr_code_url' => $onlinePaymentData['qr_code_url'] ?? null,
-                    'bank_info' => $onlinePaymentData['bank_info'] ?? null,
+                    'qr_payload' => $isOnlinePayment ? $transferDesc : null,
+                    'qr_code_url' => $isOnlinePayment ? $this->buildVietQrUrl($calculatedTotal, $transferDesc) : null,
+                    'bank_info' => $isOnlinePayment ? $this->getBankInfo() : null,
                     'reused_invoice' => false,
                 ];
             });
@@ -203,8 +192,6 @@ class BookingController extends Controller
                     'pricing' => $result['pricing'],
                     'payment_method' => $result['payment_method'],
                     'payment_method_label' => $result['payment_method_label'],
-                    'payment_provider' => $result['payment_provider'] ?? null,
-                    'payment_meta' => $result['payment_meta'] ?? null,
                     'qr_payload' => $result['qr_payload'],
                     'qr_code_url' => $result['qr_code_url'],
                     'bank_info' => $result['bank_info'] ?? null,
@@ -492,146 +479,6 @@ class BookingController extends Controller
         }
     }
 
-    public function zaloPayWebhook(Request $request): JsonResponse
-    {
-        try {
-            Log::info('zalopay_webhook_received', [
-                'payload_keys' => array_keys($request->all()),
-            ]);
-
-            $key2 = trim((string) config('services.zalopay.key2', ''));
-            if ($key2 === '') {
-                Log::error('zalopay_webhook_error', ['reason' => 'missing_key2']);
-
-                return response()->json([
-                    'return_code' => 0,
-                    'return_message' => 'missing_key2',
-                ], Response::HTTP_OK);
-            }
-
-            $data = (string) $request->input('data', '');
-            $incomingMac = (string) $request->input('mac', '');
-            if ($data === '' || $incomingMac === '') {
-                Log::warning('zalopay_webhook_rejected', ['reason' => 'missing_data_or_mac']);
-
-                return response()->json([
-                    'return_code' => -1,
-                    'return_message' => 'missing_data_or_mac',
-                ], Response::HTTP_OK);
-            }
-
-            $calculatedMac = hash_hmac('sha256', $data, $key2);
-            if (!hash_equals($calculatedMac, $incomingMac)) {
-                Log::warning('zalopay_webhook_rejected', ['reason' => 'invalid_mac']);
-
-                return response()->json([
-                    'return_code' => -1,
-                    'return_message' => 'invalid_mac',
-                ], Response::HTTP_OK);
-            }
-
-            $decodedData = json_decode($data, true);
-            if (!is_array($decodedData)) {
-                Log::warning('zalopay_webhook_rejected', ['reason' => 'invalid_data_json']);
-
-                return response()->json([
-                    'return_code' => -1,
-                    'return_message' => 'invalid_data_json',
-                ], Response::HTTP_OK);
-            }
-
-            $embedDataRaw = $decodedData['embed_data'] ?? '';
-            $embedData = [];
-            if (is_string($embedDataRaw) && $embedDataRaw !== '') {
-                $embedData = json_decode($embedDataRaw, true);
-                if (!is_array($embedData)) {
-                    $embedData = [];
-                }
-            } elseif (is_array($embedDataRaw)) {
-                $embedData = $embedDataRaw;
-            }
-
-            $invoiceId = isset($embedData['invoice_id']) ? (int) $embedData['invoice_id'] : null;
-            if (!$invoiceId) {
-                $invoiceId = $this->extractInvoiceIdFromAppTransId($decodedData['app_trans_id'] ?? null);
-            }
-
-            if (!$invoiceId) {
-                Log::warning('zalopay_webhook_rejected', [
-                    'reason' => 'invoice_not_detected',
-                    'app_trans_id' => $decodedData['app_trans_id'] ?? null,
-                ]);
-
-                return response()->json([
-                    'return_code' => 1,
-                    'return_message' => 'invoice_not_detected',
-                ], Response::HTTP_OK);
-            }
-
-            $invoice = Invoice::find($invoiceId);
-            if (!$invoice) {
-                Log::warning('zalopay_webhook_rejected', [
-                    'reason' => 'invoice_not_found',
-                    'invoice_id' => $invoiceId,
-                ]);
-
-                return response()->json([
-                    'return_code' => 1,
-                    'return_message' => 'invoice_not_found',
-                ], Response::HTTP_OK);
-            }
-
-            if ((int) $invoice->TrangThai === 1) {
-                return response()->json([
-                    'return_code' => 1,
-                    'return_message' => 'already_paid',
-                ], Response::HTTP_OK);
-            }
-
-            $receivedAmount = (float) ($decodedData['amount'] ?? 0);
-            $expectedAmount = (float) $invoice->ThanhTien;
-            if ($receivedAmount > 0 && ($receivedAmount + 0.0001) < $expectedAmount) {
-                Log::warning('zalopay_webhook_rejected', [
-                    'reason' => 'insufficient_amount',
-                    'invoice_id' => $invoiceId,
-                    'expected_amount' => $expectedAmount,
-                    'received_amount' => $receivedAmount,
-                ]);
-
-                return response()->json([
-                    'return_code' => 1,
-                    'return_message' => 'insufficient_amount',
-                ], Response::HTTP_OK);
-            }
-
-            DB::transaction(function () use ($invoiceId) {
-                Invoice::where('MaHD', $invoiceId)->update(['TrangThai' => 1]);
-                RoomBooking::where('MaHD', $invoiceId)->where('TrangThai', 1)->update(['ThanhToan' => 1]);
-                TourBooking::where('MaHD', $invoiceId)->where('TrangThai', 1)->update(['ThanhToan' => 1]);
-            });
-
-            Log::info('zalopay_webhook_confirmed', [
-                'invoice_id' => $invoiceId,
-                'app_trans_id' => $decodedData['app_trans_id'] ?? null,
-                'zp_trans_id' => $decodedData['zp_trans_id'] ?? null,
-            ]);
-
-            return response()->json([
-                'return_code' => 1,
-                'return_message' => 'success',
-            ], Response::HTTP_OK);
-        } catch (Throwable $e) {
-            Log::error('zalopay_webhook_error', [
-                'message' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'return_code' => 0,
-                'return_message' => 'server_error',
-            ], Response::HTTP_OK);
-        }
-    }
-
     private function findMinAvailableRoom(string $checkIn, string $checkOut, ?int $maLoai, ?string $roomType, ?string $roomVariant): ?Room
     {
         $query = Room::query()
@@ -745,134 +592,6 @@ class BookingController extends Controller
         $bodySecret = trim((string) $request->input('secret', ''));
 
         return hash_equals($secret, $headerSecret) || hash_equals($secret, $bodySecret);
-    }
-
-    private function buildOnlinePaymentData(float $amount, int $invoiceId, string $transferDesc): array
-    {
-        try {
-            $zaloData = $this->createZaloPayOrder($amount, $invoiceId, $transferDesc);
-            if ($zaloData !== null) {
-                return $zaloData;
-            }
-        } catch (Throwable $e) {
-            Log::warning('zalopay_create_order_failed', [
-                'invoice_id' => $invoiceId,
-                'message' => $e->getMessage(),
-            ]);
-        }
-
-        return [
-            'payment_provider' => 'vietqr',
-            'payment_meta' => null,
-            'qr_payload' => $transferDesc,
-            'qr_code_url' => $this->buildVietQrUrl($amount, $transferDesc),
-            'bank_info' => $this->getBankInfo(),
-        ];
-    }
-
-    private function createZaloPayOrder(float $amount, int $invoiceId, string $transferDesc): ?array
-    {
-        $enabled = filter_var(config('services.zalopay.enabled', false), FILTER_VALIDATE_BOOL);
-        $appId = trim((string) config('services.zalopay.app_id', ''));
-        $key1 = trim((string) config('services.zalopay.key1', ''));
-        $createEndpoint = trim((string) config('services.zalopay.create_endpoint', ''));
-
-        if (!$enabled || $appId === '' || $key1 === '' || $createEndpoint === '') {
-            return null;
-        }
-
-        $amountInt = (int) round($amount, 0);
-        if ($amountInt <= 0) {
-            return null;
-        }
-
-        $appTransId = now()->format('ymd') . '_' . $invoiceId . '_' . random_int(100000, 999999);
-        $appTime = (int) round(microtime(true) * 1000);
-        $callbackUrl = trim((string) config('services.zalopay.callback_url', ''));
-        if ($callbackUrl === '') {
-            $callbackUrl = rtrim((string) config('app.url'), '/') . '/api/webhooks/zalopay';
-        }
-
-        $embedDataArray = [
-            'invoice_id' => $invoiceId,
-            'redirect_url' => trim((string) config('services.zalopay.redirect_url', '')),
-        ];
-        $embedData = json_encode($embedDataArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $item = '[]';
-
-        $orderData = [
-            'app_id' => $appId,
-            'app_user' => 'invoice_' . $invoiceId,
-            'app_time' => $appTime,
-            'amount' => $amountInt,
-            'app_trans_id' => $appTransId,
-            'embed_data' => $embedData,
-            'item' => $item,
-            'description' => 'Thanh toan hoa don ' . $invoiceId,
-            'bank_code' => trim((string) config('services.zalopay.bank_code', '')),
-            'callback_url' => $callbackUrl,
-        ];
-
-        $dataToSign = implode('|', [
-            $orderData['app_id'],
-            $orderData['app_trans_id'],
-            $orderData['app_user'],
-            $orderData['amount'],
-            $orderData['app_time'],
-            $orderData['embed_data'],
-            $orderData['item'],
-        ]);
-        $orderData['mac'] = hash_hmac('sha256', $dataToSign, $key1);
-
-        $response = Http::asForm()->timeout(20)->post($createEndpoint, $orderData);
-        if (!$response->successful()) {
-            throw new \RuntimeException('ZaloPay HTTP ' . $response->status());
-        }
-
-        $payload = $response->json();
-        if (!is_array($payload)) {
-            throw new \RuntimeException('Invalid ZaloPay response payload');
-        }
-
-        $returnCode = (int) ($payload['return_code'] ?? -1);
-        if ($returnCode !== 1) {
-            throw new \RuntimeException((string) ($payload['return_message'] ?? 'ZaloPay create order failed'));
-        }
-
-        $paymentUrl = (string) ($payload['order_url'] ?? $payload['orderurl'] ?? '');
-        $zpToken = (string) ($payload['zp_trans_token'] ?? '');
-        if ($paymentUrl === '' && $zpToken !== '') {
-            $paymentUrl = 'https://sbgateway.zalopay.vn/openinapp?order=' . urlencode($zpToken);
-        }
-        if ($paymentUrl === '') {
-            throw new \RuntimeException('Missing order_url from ZaloPay response');
-        }
-
-        return [
-            'payment_provider' => 'zalopay',
-            'payment_meta' => [
-                'app_trans_id' => $appTransId,
-                'zp_trans_token' => $zpToken,
-                'order_url' => $paymentUrl,
-            ],
-            'qr_payload' => $paymentUrl,
-            'qr_code_url' => 'https://quickchart.io/qr?size=280&text=' . urlencode($paymentUrl),
-            'bank_info' => null,
-        ];
-    }
-
-    private function extractInvoiceIdFromAppTransId(mixed $appTransId): ?int
-    {
-        $value = trim((string) $appTransId);
-        if ($value === '') {
-            return null;
-        }
-
-        if (preg_match('/^\d{6}_(\d+)_\d+$/', $value, $matches) === 1) {
-            return (int) ($matches[1] ?? 0) ?: null;
-        }
-
-        return null;
     }
 
     private function buildVietQrUrl(float $amount, string $description): string
