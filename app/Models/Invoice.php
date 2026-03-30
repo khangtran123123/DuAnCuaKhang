@@ -15,12 +15,14 @@ class Invoice extends Model
         'NgayTao',
         'ThanhTien',
         'TrangThai',
+        'ThanhToan',
     ];
 
     protected $casts = [
         'NgayTao' => 'date',
         'ThanhTien' => 'decimal:2',
         'TrangThai' => 'boolean',
+        'ThanhToan' => 'boolean',
     ];
 
     public function customer()

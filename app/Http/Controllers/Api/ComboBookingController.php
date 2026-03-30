@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\HandlesPayment;
 use App\Models\DepartureSchedule;
 use App\Models\Invoice;
 use App\Models\Room;
@@ -19,6 +20,8 @@ use Throwable;
 
 class ComboBookingController extends Controller
 {
+    use HandlesPayment;
+
     // ── Public endpoints ───────────────────────────────────────────────────
 
     public function bookCombo(Request $request): JsonResponse
@@ -184,90 +187,6 @@ class ComboBookingController extends Controller
         }
     }
 
-    public function paymentStatus(Request $request, int $maHD): JsonResponse
-    {
-        try {
-            $invoice = Invoice::find($maHD);
-
-            if (!$invoice) {
-                return response()->json([
-                    'success' => false,
-                    'code'    => 'INVOICE_NOT_FOUND',
-                    'message' => 'Không tìm thấy hóa đơn.',
-                ], Response::HTTP_NOT_FOUND);
-            }
-
-            $isPaid = (int) $invoice->TrangThai === 1;
-
-            return response()->json([
-                'success' => true,
-                'code'    => 'PAYMENT_STATUS',
-                'message' => $isPaid ? 'Hóa đơn đã thanh toán.' : 'Hóa đơn chưa thanh toán.',
-                'data'    => [
-                    'ma_hd'                => (int) $invoice->MaHD,
-                    'is_paid'              => $isPaid,
-                    'payment_status'       => $isPaid ? 'paid' : 'unpaid',
-                    'payment_status_label' => $isPaid ? 'Đã thanh toán' : 'Chưa thanh toán',
-                ],
-            ], Response::HTTP_OK);
-        } catch (Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'code'    => 'SERVER_ERROR',
-                'message' => 'Có lỗi hệ thống khi kiểm tra trạng thái thanh toán.',
-                'error'   => $e->getMessage(),
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    public function confirmPayment(Request $request, int $maHD): JsonResponse
-    {
-        try {
-            if (!$this->isManualConfirmAuthorized($request)) {
-                return response()->json([
-                    'success' => false,
-                    'code'    => 'MANUAL_CONFIRM_FORBIDDEN',
-                    'message' => 'Xác nhận thanh toán thủ công từ ứng dụng khách đã bị tắt. Vui lòng chờ webhook ngân hàng hoặc dùng kênh quản trị.',
-                ], Response::HTTP_FORBIDDEN);
-            }
-
-            $invoice = Invoice::find($maHD);
-
-            if (!$invoice) {
-                return response()->json([
-                    'success' => false,
-                    'code'    => 'INVOICE_NOT_FOUND',
-                    'message' => 'Không tìm thấy hóa đơn.',
-                ], Response::HTTP_NOT_FOUND);
-            }
-
-            if ((int) $invoice->TrangThai === 1) {
-                return response()->json([
-                    'success' => true,
-                    'code'    => 'ALREADY_PAID',
-                    'message' => 'Hóa đơn đã được thanh toán trước đó.',
-                    'data'    => ['invoice' => $this->mapInvoice($invoice)],
-                ]);
-            }
-
-            $this->confirmInvoicePayment($maHD);
-
-            return response()->json([
-                'success' => true,
-                'code'    => 'PAYMENT_CONFIRMED',
-                'message' => 'Xác nhận thanh toán combo thành công.',
-                'data'    => ['invoice' => $this->mapInvoice($invoice->fresh())],
-            ]);
-        } catch (Throwable $e) {
-            return response()->json([
-                'success' => false,
-                'code'    => 'SERVER_ERROR',
-                'message' => 'Có lỗi hệ thống khi xác nhận thanh toán.',
-                'error'   => $e->getMessage(),
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
-
     // ── Cancellation endpoint (khi user đóng QR mà chưa trả) ─────────────
 
     public function cancelComboBooking(Request $request, int $maHD): JsonResponse
@@ -283,7 +202,7 @@ class ComboBookingController extends Controller
                 ], Response::HTTP_NOT_FOUND);
             }
 
-            if ((int) $invoice->TrangThai === 1) {
+            if ((int) $invoice->ThanhToan === 1) {
                 return response()->json([
                     'success' => false,
                     'code'    => 'INVOICE_ALREADY_PAID',
@@ -294,7 +213,11 @@ class ComboBookingController extends Controller
             DB::transaction(function () use ($maHD, $invoice) {
                 RoomBooking::where('MaHD', $maHD)->delete();
                 TourBooking::where('MaHD', $maHD)->delete();
-                $invoice->delete();
+                // Không xóa hóa đơn để giữ nguyên chuỗi tăng tự động,
+                // chỉ đặt trạng thái = 0 (chưa thanh toán / đã hủy).
+                $invoice->ThanhTien = 0;
+                $invoice->TrangThai = 0;
+                $invoice->save();
             });
 
             return response()->json([
@@ -313,62 +236,6 @@ class ComboBookingController extends Controller
     }
 
     // ── Private helpers ────────────────────────────────────────────────────
-
-    private function confirmInvoicePayment(int $maHD): void
-    {
-        DB::transaction(function () use ($maHD) {
-            Invoice::where('MaHD', $maHD)->update(['TrangThai' => 1]);
-            RoomBooking::where('MaHD', $maHD)->where('TrangThai', 1)->update(['ThanhToan' => 1]);
-            TourBooking::where('MaHD', $maHD)->where('TrangThai', 1)->update(['ThanhToan' => 1]);
-        });
-    }
-
-    private function buildTransferDescription(int $invoiceId): string
-    {
-        return 'THANH TOAN HD' . $invoiceId;
-    }
-
-    private function buildVietQrUrl(float $amount, string $description): string
-    {
-        $bankId      = env('HOTEL_BANK_ID', 'MB');
-        $accountNo   = env('HOTEL_ACCOUNT_NO', '');
-        $accountName = env('HOTEL_ACCOUNT_NAME', 'KHACH SAN');
-
-        if (empty($accountNo)) {
-            return 'https://quickchart.io/qr?size=280&text=' . urlencode($description);
-        }
-
-        return sprintf(
-            'https://img.vietqr.io/image/%s-%s-compact2.png?amount=%s&addInfo=%s&accountName=%s',
-            urlencode($bankId),
-            urlencode($accountNo),
-            number_format($amount, 0, '.', ''),
-            urlencode($description),
-            urlencode($accountName),
-        );
-    }
-
-    private function getBankInfo(): array
-    {
-        return [
-            'bank_id'      => env('HOTEL_BANK_ID', 'MB'),
-            'account_no'   => env('HOTEL_ACCOUNT_NO', ''),
-            'account_name' => env('HOTEL_ACCOUNT_NAME', 'KHACH SAN'),
-        ];
-    }
-
-    private function isManualConfirmAuthorized(Request $request): bool
-    {
-        $secret = trim((string) env('MANUAL_PAYMENT_CONFIRM_SECRET', ''));
-        if ($secret === '') {
-            return false;
-        }
-
-        $headerSecret = trim((string) $request->header('X-Manual-Confirm-Secret', ''));
-        $bodySecret = trim((string) $request->input('secret', ''));
-
-        return hash_equals($secret, $headerSecret) || hash_equals($secret, $bodySecret);
-    }
 
     private function mapInvoice(Invoice $invoice): array
     {
