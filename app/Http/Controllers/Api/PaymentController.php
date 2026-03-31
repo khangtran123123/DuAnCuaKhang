@@ -120,26 +120,37 @@ class PaymentController extends Controller
     public function bankTransferWebhook(Request $request): JsonResponse
     {
         try {
+            $authorizationHeader = (string) $request->header('Authorization', '');
+
             Log::info('bank_transfer_webhook_received', [
                 'headers' => [
                     'user-agent'                   => $request->userAgent(),
+                    'authorization-present'        => $authorizationHeader !== '',
                     'x-webhook-secret-present'     => $request->header('X-Webhook-Secret') !== null,
                 ],
                 'payload' => $request->all(),
             ]);
 
-            // Xác thực webhook secret
-            $secret       = (string) env('BANK_WEBHOOK_SECRET', '');
-            $headerSecret = (string) $request->header('X-Webhook-Secret', '');
-            $bodySecret   = (string) $request->input('secret', '');
+            // Xác thực webhook: ưu tiên API key kiểu SePay, fallback header/body secret cũ.
+            $secret       = trim((string) env('SEPAY_WEBHOOK_API_KEY', env('BANK_WEBHOOK_SECRET', '')));
+            $headerSecret = trim((string) $request->header('X-Webhook-Secret', ''));
+            $bodySecret   = trim((string) $request->input('secret', ''));
+            $bodyApiKey   = trim((string) $request->input('api_key', ''));
+            $authToken    = $this->normalizeAuthToken($authorizationHeader);
 
-            if ($secret !== '' && $headerSecret !== $secret && $bodySecret !== $secret) {
+            if (
+                $secret !== ''
+                && !hash_equals($secret, $authToken)
+                && !hash_equals($secret, $headerSecret)
+                && !hash_equals($secret, $bodySecret)
+                && !hash_equals($secret, $bodyApiKey)
+            ) {
                 Log::warning('bank_transfer_webhook_rejected', ['reason' => 'invalid_secret']);
 
                 return response()->json([
                     'success' => false,
                     'code'    => 'WEBHOOK_UNAUTHORIZED',
-                    'message' => 'Webhook secret không hợp lệ.',
+                    'message' => 'Webhook secret/API key không hợp lệ.',
                 ], Response::HTTP_UNAUTHORIZED);
             }
 
@@ -272,6 +283,24 @@ class PaymentController extends Controller
                 'error'   => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    private function normalizeAuthToken(string $authorizationHeader): string
+    {
+        $authorizationHeader = trim($authorizationHeader);
+        if ($authorizationHeader === '') {
+            return '';
+        }
+
+        if (preg_match('/^apikey\s+(.+)$/i', $authorizationHeader, $matches) === 1) {
+            return trim((string) ($matches[1] ?? ''));
+        }
+
+        if (preg_match('/^bearer\s+(.+)$/i', $authorizationHeader, $matches) === 1) {
+            return trim((string) ($matches[1] ?? ''));
+        }
+
+        return $authorizationHeader;
     }
 
     // ── Mapping helpers (dùng nội bộ) ─────────────────────────────────────
