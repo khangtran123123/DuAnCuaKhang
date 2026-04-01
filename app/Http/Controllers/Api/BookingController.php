@@ -55,7 +55,7 @@ class BookingController extends Controller
                     return response()->json([
                         'success' => false,
                         'code' => 'NO_ROOM_AVAILABLE',
-                        'message' => 'KhÃ´ng cÃ²n phÃ²ng trá»‘ng trong khoáº£ng thá»i gian nÃ y.',
+                        'message' => 'Không còn phòng trống trong khoảng thời gian này.',
                     ], Response::HTTP_CONFLICT);
                 }
 
@@ -95,11 +95,11 @@ class BookingController extends Controller
                 return response()->json([
                     'success' => false,
                     'code' => 'ROOM_CONFLICT',
-                    'message' => 'PhÃ²ng Ä‘Ã£ Ä‘Æ°á»£c Ä‘áº·t trong khoáº£ng thá»i gian nÃ y.',
+                    'message' => 'Phòng đã được đặt trong khoảng thời gian này.',
                 ], Response::HTTP_CONFLICT);
             }
 
-            // TÃ¬m hÃ³a Ä‘Æ¡n cá»§a cÃ¹ng khÃ¡ch hÃ ng cÃ³ hÃ³a Ä‘Æ¡n phÃ²ng trÃ¹ng ngÃ y
+            // Tìm hóa đơn của cùng khách hàng có hóa đơn phòng trùng ngày
             $existingInvoice = Invoice::where('MaKH', $data['ma_kh'])
                 ->where('TrangThai', 1)
                 ->whereHas('rooms', function ($q) use ($data) {
@@ -111,7 +111,7 @@ class BookingController extends Controller
 
             $result = DB::transaction(function () use ($data, $calculatedTotal, $roomPrice, $totalDays, $existingInvoice, $isOnlinePayment, $paymentMethod) {
                 if ($existingInvoice !== null) {
-                    // ThÃªm phÃ²ng vÃ o hÃ³a Ä‘Æ¡n hiá»‡n táº¡i, cáº­p nháº­t tá»•ng tiá»n
+                    // Thêm phòng vào hóa đơn hiện tại, cập nhật tổng tiền
                     $roomBooking = RoomBooking::create([
                         'MaHD' => $existingInvoice->MaHD,
                         'MaPhong' => $data['ma_phong'],
@@ -137,7 +137,7 @@ class BookingController extends Controller
                             'tong_tien' => $calculatedTotal,
                         ],
                         'payment_method' => $paymentMethod,
-                        'payment_method_label' => $isOnlinePayment ? 'Thanh toÃ¡n trá»±c tuyáº¿n' : 'Thanh toÃ¡n táº¡i quáº§y',
+                        'payment_method_label' => $isOnlinePayment ? 'Thanh toán trực tuyến' : 'Thanh toán tại quầy',
                         'qr_payload' => $isOnlinePayment ? $transferDesc : null,
                         'qr_code_url' => $isOnlinePayment ? $this->buildVietQrUrl((float) $freshInvoice->ThanhTien, $transferDesc) : null,
                         'bank_info' => $isOnlinePayment ? $this->getBankInfo() : null,
@@ -145,7 +145,7 @@ class BookingController extends Controller
                     ];
                 }
 
-                // Táº¡o hÃ³a Ä‘Æ¡n má»›i â€“ luÃ´n TrangThai=0, xÃ¡c nháº­n qua confirm-payment
+                // Tạo hóa đơn mới – luôn TrangThai=0, xác nhận qua confirm-payment
                 $invoice = Invoice::create([
                     'MaKH' => $data['ma_kh'],
                     'NgayTao' => now()->toDateString(),
@@ -175,7 +175,7 @@ class BookingController extends Controller
                         'tong_tien' => $calculatedTotal,
                     ],
                     'payment_method' => $paymentMethod,
-                    'payment_method_label' => $isOnlinePayment ? 'Thanh toÃ¡n trá»±c tuyáº¿n' : 'Thanh toÃ¡n táº¡i quáº§y',
+                    'payment_method_label' => $isOnlinePayment ? 'Thanh toán trực tuyến' : 'Thanh toán tại quầy',
                     'qr_payload' => $isOnlinePayment ? $transferDesc : null,
                     'qr_code_url' => $isOnlinePayment ? $this->buildVietQrUrl($calculatedTotal, $transferDesc) : null,
                     'bank_info' => $isOnlinePayment ? $this->getBankInfo() : null,
@@ -187,7 +187,7 @@ class BookingController extends Controller
             return response()->json([
                 'success' => true,
                 'code' => $reused ? 'ROOM_ADDED_TO_INVOICE' : 'BOOKING_CREATED',
-                'message' => $reused ? 'PhÃ²ng Ä‘Ã£ Ä‘Æ°á»£c thÃªm vÃ o hÃ³a Ä‘Æ¡n hiá»‡n táº¡i.' : 'Äáº·t phÃ²ng thÃ nh cÃ´ng.',
+                'message' => $reused ? 'Phòng đã được thêm vào hóa đơn hiện tại.' : 'Đặt phòng thành công.',
                 'data' => [
                     'invoice' => $this->mapInvoice($result['invoice']),
                     'booking' => $this->mapRoomBooking($result['booking']),
@@ -203,14 +203,14 @@ class BookingController extends Controller
             return response()->json([
                 'success' => false,
                 'code' => 'VALIDATION_ERROR',
-                'message' => 'Dá»¯ liá»‡u khÃ´ng há»£p lá»‡.',
+                'message' => 'Dữ liệu không hợp lệ.',
                 'errors' => $e->errors(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (Throwable $e) {
             return response()->json([
                 'success' => false,
                 'code' => 'SERVER_ERROR',
-                'message' => 'CÃ³ lá»—i há»‡ thá»‘ng, vui lÃ²ng thá»­ láº¡i.',
+                'message' => 'Có lỗi hệ thống, vui lòng thử lại.',
                 'error' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
@@ -381,7 +381,7 @@ class BookingController extends Controller
             'trang_thai' => (int) ((bool) $invoice->TrangThai),
             'thanh_toan' => $isPaid ? 1 : 0,
             'payment_status' => $isPaid ? 'paid' : 'unpaid',
-            'payment_status_label' => $isPaid ? 'ÄÃ£ thanh toÃ¡n' : 'ChÆ°a thanh toÃ¡n',
+            'payment_status_label' => $isPaid ? 'Đã thanh toán' : 'Chưa thanh toán',
             'rooms' => $invoice->rooms->map(fn (RoomBooking $roomBooking) => $this->mapRoomBooking($roomBooking))->values(),
             'tours' => $invoice->tourBookings->map(fn ($tb) => $this->mapTourBooking($tb))->values(),
         ];
@@ -400,7 +400,7 @@ class BookingController extends Controller
             'tong_tien'    => (float) $tourBooking->TongTien,
             'trang_thai'   => (int) ((bool) $tourBooking->TrangThai),
             'thanh_toan'   => (int) ((bool) $tourBooking->ThanhToan),
-            'payment_status_label' => $tourBooking->ThanhToan ? 'ÄÃ£ thanh toÃ¡n' : 'ChÆ°a thanh toÃ¡n',
+            'payment_status_label' => $tourBooking->ThanhToan ? 'Đã thanh toán' : 'Chưa thanh toán',
             'schedule' => $schedule ? [
                 'ma_lkh'        => (int) $schedule->MaLKH,
                 'ngay_khoi_hanh'=> optional($schedule->NgayKhoiHanh)->format('Y-m-d'),
@@ -426,10 +426,10 @@ class BookingController extends Controller
             'ngay_tra_phong' => optional($roomBooking->NgayTraPhong)->format('Y-m-d') ?? (string) $roomBooking->NgayTraPhong,
             'tong_tien' => (float) $roomBooking->TongTien,
             'trang_thai' => (int) ((bool) $roomBooking->TrangThai),
-            'booking_status_label' => $roomBooking->TrangThai ? 'Äang giá»¯ chá»—' : 'ÄÃ£ há»§y',
+            'booking_status_label' => $roomBooking->TrangThai ? 'Đang giữ chỗ' : 'Đã hủy',
             'thanh_toan' => (int) ((bool) $roomBooking->ThanhToan),
             'payment_status' => $roomBooking->ThanhToan ? 'paid' : 'unpaid',
-            'payment_status_label' => $roomBooking->ThanhToan ? 'ÄÃ£ thanh toÃ¡n' : 'ChÆ°a thanh toÃ¡n',
+            'payment_status_label' => $roomBooking->ThanhToan ? 'Đã thanh toán' : 'Chưa thanh toán',
             'room' => $room ? [
                 'MaPhong' => (string) $room->MaPhong,
                 'TenPhong' => $room->TenPhong ?? '',
