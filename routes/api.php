@@ -26,6 +26,7 @@ Route::post('bookings/{maHD}/rooms/{maPhong}/cancel', [BookingController::class,
 Route::post('bookings/{maHD}/confirm-payment', [PaymentController::class, 'confirmPayment']);
 Route::get('bookings/{maHD}/payment-status', [PaymentController::class, 'paymentStatus']);
 Route::post('bookings/{maHD}/cancel-invoice', [BookingController::class, 'cancelInvoice']);
+Route::post('payments/check-transfer', [PaymentController::class, 'checkTransfer']);
 Route::post('webhooks/bank-transfer', [PaymentController::class, 'bankTransferWebhook']);
 
 // Combo Booking (Tour + Room)

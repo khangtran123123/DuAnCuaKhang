@@ -177,6 +177,8 @@ class BookingController extends Controller
                 'ngay_nhan_phong'      => ['required', 'date'],
                 'ngay_tra_phong'       => ['required', 'date', 'after_or_equal:ngay_nhan_phong'],
                 'payment_method'       => ['nullable', 'string', 'in:counter,online'],
+                'transfer_content'     => ['nullable', 'string', 'max:255'],
+                'paid_amount'          => ['nullable', 'numeric', 'min:1'],
                 'rooms'                => ['required', 'array', 'min:1'],
                 'rooms.*.room_type'    => ['nullable', 'string'],
                 'rooms.*.room_variant' => ['nullable', 'string', 'in:nt,view'],
@@ -224,12 +226,40 @@ class BookingController extends Controller
 
             $totalAmount = (float) array_sum(array_column($bookingSlots, 'tong_tien'));
 
-            $result = DB::transaction(function () use ($data, $bookingSlots, $totalAmount, $checkIn, $checkOut, $paymentMethod, $isOnline) {
+            $hasTransferProof = $isOnline
+                && !empty($data['transfer_content'])
+                && isset($data['paid_amount']);
+
+            $isPrepaidVerified = false;
+            if ($hasTransferProof) {
+                $paidAmount = (float) $data['paid_amount'];
+                if ($paidAmount + 0.0001 < $totalAmount) {
+                    return response()->json([
+                        'success' => false,
+                        'code'    => 'INSUFFICIENT_PAID_AMOUNT',
+                        'message' => 'So tien da chuyen chua du de tao hoa don.',
+                    ], Response::HTTP_UNPROCESSABLE_ENTITY);
+                }
+
+                $verify = $this->verifyIncomingTransfer((string) $data['transfer_content'], $totalAmount);
+                if (!$verify['matched']) {
+                    return response()->json([
+                        'success' => false,
+                        'code'    => 'TRANSFER_NOT_FOUND',
+                        'message' => 'Chua ghi nhan bien dong so du phu hop. Vui long thu lai sau.',
+                    ], Response::HTTP_UNPROCESSABLE_ENTITY);
+                }
+
+                $isPrepaidVerified = true;
+            }
+
+            $result = DB::transaction(function () use ($data, $bookingSlots, $totalAmount, $checkIn, $checkOut, $paymentMethod, $isOnline, $isPrepaidVerified) {
                 $invoice = Invoice::create([
                     'MaKH'      => $data['ma_kh'],
                     'NgayTao'   => now()->toDateString(),
                     'ThanhTien' => $totalAmount,
                     'TrangThai' => 1,
+                    'ThanhToan' => $isPrepaidVerified ? 1 : 0,
                 ]);
 
                 foreach ($bookingSlots as $slot) {
@@ -240,7 +270,7 @@ class BookingController extends Controller
                         'NgayTraPhong'  => $checkOut,
                         'TongTien'      => $slot['tong_tien'],
                         'TrangThai'     => 1,
-                        'ThanhToan'     => 0,
+                        'ThanhToan'     => $isPrepaidVerified ? 1 : 0,
                     ]);
                 }
 
@@ -299,7 +329,7 @@ class BookingController extends Controller
             }
             DB::transaction(function () use ($invoice) {
                 RoomBooking::where('MaHD', $invoice->MaHD)->where('TrangThai', 1)->delete();
-                $invoice->ThanhTien = 0;
+                $invoice->ThanhTien = null;
                 $invoice->TrangThai = 0;
                 $invoice->save();
             });
@@ -440,7 +470,7 @@ class BookingController extends Controller
                 if ($remainingTotal <= 0) {
                     // Không xóa hóa đơn để giữ nguyên chuỗi tăng tự động,
                     // chỉ đặt trạng thái = 0 (đã hủy) bất kể remove_record.
-                    $invoice->ThanhTien = 0;
+                    $invoice->ThanhTien = null;
                     $invoice->TrangThai = 0;
                     $invoice->save();
 

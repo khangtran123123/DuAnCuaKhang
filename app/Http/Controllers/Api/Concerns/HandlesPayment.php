@@ -6,6 +6,7 @@ use App\Models\Invoice;
 use App\Models\RoomBooking;
 use App\Models\TourBooking;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -136,6 +137,133 @@ trait HandlesPayment
 
         $parsedAmount = (float) $amount;
         return is_finite($parsedAmount) ? $parsedAmount : null;
+    }
+
+    /**
+     * Kiem tra SePay xem da co bien dong so du khop noi dung + so tien chua.
+     *
+     * @return array{matched: bool, reason: string, transaction: ?array}
+     */
+    protected function verifyIncomingTransfer(string $transferContent, float $expectedAmount): array
+    {
+        $apiKey = trim((string) env('SEPAY_WEBHOOK_API_KEY', ''));
+        if ($apiKey === '') {
+            return ['matched' => false, 'reason' => 'missing_api_key', 'transaction' => null];
+        }
+
+        $baseUrl = rtrim((string) env('SEPAY_API_BASE_URL', 'https://my.sepay.vn/userapi'), '/');
+        $candidates = [
+            $baseUrl . '/transactions/list',
+            $baseUrl . '/transactions',
+            $baseUrl . '/banking/transactions',
+        ];
+
+        $normalizedExpectedContent = $this->normalizeTransferContent($transferContent);
+
+        foreach ($candidates as $url) {
+            $response = Http::timeout(15)
+                ->acceptJson()
+                ->withHeaders([
+                    'Authorization' => 'Apikey ' . $apiKey,
+                ])
+                ->get($url, [
+                    'limit' => 100,
+                ]);
+
+            if (!$response->successful()) {
+                continue;
+            }
+
+            $payload = $response->json();
+            $transactions = $this->extractTransactionsFromPayload($payload);
+
+            foreach ($transactions as $transaction) {
+                if (!is_array($transaction)) {
+                    continue;
+                }
+
+                $contentRaw = (string) (
+                    $transaction['transaction_content']
+                    ?? $transaction['transfer_content']
+                    ?? $transaction['description']
+                    ?? $transaction['content']
+                    ?? ''
+                );
+                $normalizedContent = $this->normalizeTransferContent($contentRaw);
+
+                if ($normalizedContent === '' || strpos($normalizedContent, $normalizedExpectedContent) === false) {
+                    continue;
+                }
+
+                $amount = $this->parseTransferAmount(
+                    $transaction['amount']
+                    ?? $transaction['transfer_amount']
+                    ?? $transaction['amount_in']
+                    ?? $transaction['in_amount']
+                    ?? null
+                );
+
+                if ($amount === null || $amount + 0.0001 < $expectedAmount) {
+                    continue;
+                }
+
+                $flow = strtolower((string) (
+                    $transaction['transaction_type']
+                    ?? $transaction['type']
+                    ?? $transaction['flow']
+                    ?? $transaction['direction']
+                    ?? ''
+                ));
+
+                if ($flow !== '' && str_contains($flow, 'out')) {
+                    continue;
+                }
+
+                return [
+                    'matched' => true,
+                    'reason' => 'matched',
+                    'transaction' => $transaction,
+                ];
+            }
+        }
+
+        return ['matched' => false, 'reason' => 'not_found', 'transaction' => null];
+    }
+
+    protected function normalizeTransferContent(string $value): string
+    {
+        $upper = mb_strtoupper(trim($value), 'UTF-8');
+        return preg_replace('/\s+/u', ' ', $upper) ?? $upper;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    protected function extractTransactionsFromPayload(mixed $payload): array
+    {
+        if (is_array($payload) && isset($payload['transactions']) && is_array($payload['transactions'])) {
+            return $payload['transactions'];
+        }
+
+        if (is_array($payload) && isset($payload['items']) && is_array($payload['items'])) {
+            return $payload['items'];
+        }
+
+        if (is_array($payload) && isset($payload['data']) && is_array($payload['data'])) {
+            $data = $payload['data'];
+            if (isset($data['transactions']) && is_array($data['transactions'])) {
+                return $data['transactions'];
+            }
+            if (array_is_list($data)) {
+                return $data;
+            }
+        }
+
+        if (is_array($payload) && array_is_list($payload)) {
+            return $payload;
+        }
+
+        return [];
     }
 
     // ── Bảo mật ───────────────────────────────────────────────────────────

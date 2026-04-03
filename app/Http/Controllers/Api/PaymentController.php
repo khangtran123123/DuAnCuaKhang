@@ -22,6 +22,50 @@ class PaymentController extends Controller
 {
     use HandlesPayment;
 
+    public function checkTransfer(Request $request): JsonResponse
+    {
+        try {
+            $data = $request->validate([
+                'transfer_content' => ['required', 'string', 'min:3', 'max:255'],
+                'expected_amount'  => ['required', 'numeric', 'min:1'],
+            ]);
+
+            $result = $this->verifyIncomingTransfer(
+                (string) $data['transfer_content'],
+                (float) $data['expected_amount'],
+            );
+
+            if (!$result['matched']) {
+                return response()->json([
+                    'success' => false,
+                    'code'    => 'TRANSFER_NOT_FOUND',
+                    'message' => 'Chua ghi nhan bien dong so du phu hop.',
+                    'data'    => [
+                        'matched' => false,
+                        'reason'  => $result['reason'],
+                    ],
+                ], Response::HTTP_OK);
+            }
+
+            return response()->json([
+                'success' => true,
+                'code'    => 'TRANSFER_MATCHED',
+                'message' => 'Da ghi nhan bien dong so du.',
+                'data'    => [
+                    'matched'     => true,
+                    'transaction' => $result['transaction'],
+                ],
+            ], Response::HTTP_OK);
+        } catch (Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'code'    => 'SERVER_ERROR',
+                'message' => 'Co loi he thong khi kiem tra bien dong so du.',
+                'error'   => $e->getMessage(),
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
     // ── Kiểm tra trạng thái thanh toán hóa đơn ────────────────────────────
 
     public function paymentStatus(Request $request, int $maHD): JsonResponse
