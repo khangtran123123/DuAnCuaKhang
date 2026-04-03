@@ -156,18 +156,22 @@ trait HandlesPayment
             $baseUrl . '/transactions/list',
             $baseUrl . '/transactions',
             $baseUrl . '/banking/transactions',
+            $baseUrl . '/banking/transactions/list',
         ];
 
         $normalizedExpectedContent = $this->normalizeTransferContent($transferContent);
+        $compactExpectedContent = $this->compactTransferContent($transferContent);
 
         foreach ($candidates as $url) {
             $response = Http::timeout(15)
                 ->acceptJson()
                 ->withHeaders([
                     'Authorization' => 'Apikey ' . $apiKey,
+                    'X-Api-Key' => $apiKey,
                 ])
                 ->get($url, [
-                    'limit' => 100,
+                    'limit' => 200,
+                    'sort' => 'desc',
                 ]);
 
             if (!$response->successful()) {
@@ -185,20 +189,28 @@ trait HandlesPayment
                 $contentRaw = (string) (
                     $transaction['transaction_content']
                     ?? $transaction['transfer_content']
+                    ?? $transaction['transactionContent']
+                    ?? $transaction['transferContent']
                     ?? $transaction['description']
                     ?? $transaction['content']
                     ?? ''
                 );
                 $normalizedContent = $this->normalizeTransferContent($contentRaw);
+                $compactContent = $this->compactTransferContent($contentRaw);
 
-                if ($normalizedContent === '' || strpos($normalizedContent, $normalizedExpectedContent) === false) {
+                $contentMatched = str_contains($normalizedContent, $normalizedExpectedContent)
+                    || ($compactExpectedContent !== '' && str_contains($compactContent, $compactExpectedContent));
+
+                if ($normalizedContent === '' || !$contentMatched) {
                     continue;
                 }
 
                 $amount = $this->parseTransferAmount(
                     $transaction['amount']
                     ?? $transaction['transfer_amount']
+                    ?? $transaction['transferAmount']
                     ?? $transaction['amount_in']
+                    ?? $transaction['amountIn']
                     ?? $transaction['in_amount']
                     ?? null
                 );
@@ -209,13 +221,22 @@ trait HandlesPayment
 
                 $flow = strtolower((string) (
                     $transaction['transaction_type']
+                    ?? $transaction['transactionType']
+                    ?? $transaction['transferType']
                     ?? $transaction['type']
                     ?? $transaction['flow']
                     ?? $transaction['direction']
                     ?? ''
                 ));
 
-                if ($flow !== '' && str_contains($flow, 'out')) {
+                if (
+                    $flow !== ''
+                    && (
+                        str_contains($flow, 'out')
+                        || str_contains($flow, 'debit')
+                        || str_contains($flow, 'withdraw')
+                    )
+                ) {
                     continue;
                 }
 
@@ -236,6 +257,12 @@ trait HandlesPayment
         return preg_replace('/\s+/u', ' ', $upper) ?? $upper;
     }
 
+    protected function compactTransferContent(string $value): string
+    {
+        $normalized = $this->normalizeTransferContent($value);
+        return preg_replace('/[^\p{L}\p{N}]+/u', '', $normalized) ?? $normalized;
+    }
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -254,13 +281,39 @@ trait HandlesPayment
             if (isset($data['transactions']) && is_array($data['transactions'])) {
                 return $data['transactions'];
             }
+            if (isset($data['items']) && is_array($data['items'])) {
+                return $data['items'];
+            }
             if (array_is_list($data)) {
                 return $data;
+            }
+
+            if (
+                isset($data['id'])
+                || isset($data['referenceCode'])
+                || isset($data['transferAmount'])
+                || isset($data['transfer_content'])
+                || isset($data['transferContent'])
+            ) {
+                return [$data];
             }
         }
 
         if (is_array($payload) && array_is_list($payload)) {
             return $payload;
+        }
+
+        if (
+            is_array($payload)
+            && (
+                isset($payload['id'])
+                || isset($payload['referenceCode'])
+                || isset($payload['transferAmount'])
+                || isset($payload['transfer_content'])
+                || isset($payload['transferContent'])
+            )
+        ) {
+            return [$payload];
         }
 
         return [];
