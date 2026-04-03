@@ -203,9 +203,15 @@ class PaymentController extends Controller
                 $request->input('content')
                 ?? $request->input('description')
                 ?? $request->input('transfer_content')
+                ?? $request->input('transferContent')
+                ?? $request->input('transaction_content')
+                ?? $request->input('transactionContent')
                 ?? $request->input('data.content')
                 ?? $request->input('data.description')
                 ?? $request->input('data.transfer_content')
+                ?? $request->input('data.transferContent')
+                ?? $request->input('data.transaction_content')
+                ?? $request->input('data.transactionContent')
                 ?? ''
             ));
 
@@ -218,11 +224,17 @@ class PaymentController extends Controller
                 ?? $request->input('data.transfer_amount')
                 ?? $request->input('data.transferAmount')
                 ?? $request->input('amount_in')
+                ?? $request->input('amountIn')
                 ?? $request->input('amountOut')
                 ?? $request->input('data.amount_in')
+                ?? $request->input('data.amountIn')
                 ?? null
             );
             $amount = $this->parseTransferAmount($rawAmount);
+
+            if ($content !== '') {
+                $this->rememberIncomingTransfer($content, $amount, $request->all());
+            }
 
             if ($content === '') {
                 Log::warning('bank_transfer_webhook_rejected', ['reason' => 'missing_content', 'amount' => $amount]);

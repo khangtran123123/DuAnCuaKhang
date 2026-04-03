@@ -6,6 +6,7 @@ use App\Models\Invoice;
 use App\Models\RoomBooking;
 use App\Models\TourBooking;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 
@@ -146,6 +147,11 @@ trait HandlesPayment
      */
     protected function verifyIncomingTransfer(string $transferContent, float $expectedAmount): array
     {
+        $cachedTransaction = $this->findRecentIncomingTransferFromCache($transferContent, $expectedAmount);
+        if ($cachedTransaction !== null) {
+            return ['matched' => true, 'reason' => 'matched_cache', 'transaction' => $cachedTransaction];
+        }
+
         $apiKey = trim((string) env('SEPAY_WEBHOOK_API_KEY', ''));
         if ($apiKey === '') {
             return ['matched' => false, 'reason' => 'missing_api_key', 'transaction' => null];
@@ -249,6 +255,78 @@ trait HandlesPayment
         }
 
         return ['matched' => false, 'reason' => 'not_found', 'transaction' => null];
+    }
+
+    protected function rememberIncomingTransfer(string $content, ?float $amount, array $rawPayload = []): void
+    {
+        $normalizedContent = $this->normalizeTransferContent($content);
+        if ($normalizedContent === '') {
+            return;
+        }
+
+        $cacheKey = 'sepay_recent_incoming_transfers';
+        $existing = Cache::get($cacheKey, []);
+        if (!is_array($existing)) {
+            $existing = [];
+        }
+
+        array_unshift($existing, [
+            'content' => $content,
+            'amount' => (float) ($amount ?? 0),
+            'raw' => $rawPayload,
+            'created_at' => time(),
+        ]);
+
+        // Chi can giu 300 giao dich gan nhat trong 2 gio de verify nhanh.
+        $existing = array_slice($existing, 0, 300);
+
+        Cache::put($cacheKey, $existing, now()->addHours(2));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function findRecentIncomingTransferFromCache(string $transferContent, float $expectedAmount): ?array
+    {
+        $cacheKey = 'sepay_recent_incoming_transfers';
+        $rows = Cache::get($cacheKey, []);
+        if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+
+        $normalizedExpectedContent = $this->normalizeTransferContent($transferContent);
+        $compactExpectedContent = $this->compactTransferContent($transferContent);
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $rawContent = (string) ($row['content'] ?? '');
+            $normalizedContent = $this->normalizeTransferContent($rawContent);
+            $compactContent = $this->compactTransferContent($rawContent);
+
+            $contentMatched = str_contains($normalizedContent, $normalizedExpectedContent)
+                || ($compactExpectedContent !== '' && str_contains($compactContent, $compactExpectedContent));
+
+            if ($normalizedContent === '' || !$contentMatched) {
+                continue;
+            }
+
+            $amount = $this->parseTransferAmount($row['amount'] ?? null);
+            if ($amount === null || $amount + 0.0001 < $expectedAmount) {
+                continue;
+            }
+
+            return [
+                'content' => $rawContent,
+                'amount' => $amount,
+                'source' => 'webhook_cache',
+                'raw' => is_array($row['raw'] ?? null) ? $row['raw'] : [],
+            ];
+        }
+
+        return null;
     }
 
     protected function normalizeTransferContent(string $value): string
