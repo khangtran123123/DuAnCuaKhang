@@ -99,53 +99,7 @@ class BookingController extends Controller
                 ], Response::HTTP_CONFLICT);
             }
 
-            // Tìm hóa đơn của cùng khách hàng có hóa đơn phòng trùng ngày
-            $existingInvoice = Invoice::where('MaKH', $data['ma_kh'])
-                ->where('TrangThai', 1)
-                ->whereHas('rooms', function ($q) use ($data) {
-                    $q->where('NgayNhanPhong', $data['ngay_nhan_phong'])
-                      ->where('NgayTraPhong', $data['ngay_tra_phong'])
-                      ->where('TrangThai', 1);
-                })
-                ->first();
-
-            $result = DB::transaction(function () use ($data, $calculatedTotal, $roomPrice, $totalDays, $existingInvoice, $isOnlinePayment, $paymentMethod) {
-                if ($existingInvoice !== null) {
-                    // Thêm phòng vào hóa đơn hiện tại, cập nhật tổng tiền
-                    $roomBooking = RoomBooking::create([
-                        'MaHD' => $existingInvoice->MaHD,
-                        'MaPhong' => $data['ma_phong'],
-                        'NgayNhanPhong' => $data['ngay_nhan_phong'],
-                        'NgayTraPhong' => $data['ngay_tra_phong'],
-                        'TongTien' => $calculatedTotal,
-                        'TrangThai' => 1,
-                        'ThanhToan' => 0,
-                    ]);
-
-                    $existingInvoice->ThanhTien = round((float) $existingInvoice->ThanhTien + $calculatedTotal, 2);
-                    $existingInvoice->save();
-
-                    $freshInvoice = $existingInvoice->fresh()->load('rooms.room.type');
-                    $transferDesc = $this->buildTransferDescription((int) $freshInvoice->MaHD);
-
-                    return [
-                        'invoice' => $freshInvoice,
-                        'booking' => $roomBooking->load('room.type'),
-                        'pricing' => [
-                            'gia_phong' => $roomPrice,
-                            'so_ngay_o' => $totalDays,
-                            'tong_tien' => $calculatedTotal,
-                        ],
-                        'payment_method' => $paymentMethod,
-                        'payment_method_label' => $isOnlinePayment ? 'Thanh toán trực tuyến' : 'Thanh toán tại quầy',
-                        'qr_payload' => $isOnlinePayment ? $transferDesc : null,
-                        'qr_code_url' => $isOnlinePayment ? $this->buildVietQrUrl((float) $freshInvoice->ThanhTien, $transferDesc) : null,
-                        'bank_info' => $isOnlinePayment ? $this->getBankInfo() : null,
-                        'reused_invoice' => true,
-                    ];
-                }
-
-                // Tạo hóa đơn mới – luôn TrangThai=0, xác nhận qua confirm-payment
+            $result = DB::transaction(function () use ($data, $calculatedTotal, $roomPrice, $totalDays, $isOnlinePayment, $paymentMethod) {
                 $invoice = Invoice::create([
                     'MaKH' => $data['ma_kh'],
                     'NgayTao' => now()->toDateString(),
@@ -179,15 +133,13 @@ class BookingController extends Controller
                     'qr_payload' => $isOnlinePayment ? $transferDesc : null,
                     'qr_code_url' => $isOnlinePayment ? $this->buildVietQrUrl($calculatedTotal, $transferDesc) : null,
                     'bank_info' => $isOnlinePayment ? $this->getBankInfo() : null,
-                    'reused_invoice' => false,
                 ];
             });
 
-            $reused = $result['reused_invoice'];
             return response()->json([
                 'success' => true,
-                'code' => $reused ? 'ROOM_ADDED_TO_INVOICE' : 'BOOKING_CREATED',
-                'message' => $reused ? 'Phòng đã được thêm vào hóa đơn hiện tại.' : 'Đặt phòng thành công.',
+                'code' => 'BOOKING_CREATED',
+                'message' => 'Đặt phòng thành công.',
                 'data' => [
                     'invoice' => $this->mapInvoice($result['invoice']),
                     'booking' => $this->mapRoomBooking($result['booking']),
@@ -216,6 +168,170 @@ class BookingController extends Controller
         }
     }
 
+
+    public function bookMulti(Request $request): JsonResponse
+    {
+        try {
+            $data = $request->validate([
+                'ma_kh'                => ['required', 'integer', 'exists:tbl_KhachHang,MaKH'],
+                'ngay_nhan_phong'      => ['required', 'date'],
+                'ngay_tra_phong'       => ['required', 'date', 'after_or_equal:ngay_nhan_phong'],
+                'payment_method'       => ['nullable', 'string', 'in:counter,online'],
+                'rooms'                => ['required', 'array', 'min:1'],
+                'rooms.*.room_type'    => ['nullable', 'string'],
+                'rooms.*.room_variant' => ['nullable', 'string', 'in:nt,view'],
+                'rooms.*.quantity'     => ['required', 'integer', 'min:1', 'max:10'],
+            ]);
+
+            $paymentMethod = $data['payment_method'] ?? 'counter';
+            $isOnline      = $paymentMethod === 'online';
+            $checkIn       = $data['ngay_nhan_phong'];
+            $checkOut      = $data['ngay_tra_phong'];
+            $totalDays     = max(1, Carbon::parse($checkIn)->startOfDay()->diffInDays(Carbon::parse($checkOut)->startOfDay()));
+
+            $bookingSlots  = [];
+            $assignedRooms = [];
+
+            foreach ($data['rooms'] as $roomRequest) {
+                $quantity    = (int) $roomRequest['quantity'];
+                $roomType    = $roomRequest['room_type'] ?? null;
+                $roomVariant = $roomRequest['room_variant'] ?? null;
+
+                for ($i = 0; $i < $quantity; $i++) {
+                    $room = $this->findMinAvailableRoomExcluding(
+                        checkIn: $checkIn,
+                        checkOut: $checkOut,
+                        roomType: $roomType,
+                        roomVariant: $roomVariant,
+                        excludeRooms: $assignedRooms,
+                    );
+
+                    if (!$room) {
+                        return response()->json([
+                            'success' => false,
+                            'code'    => 'NO_ROOM_AVAILABLE',
+                            'message' => "Không đủ phòng trống cho loại '" . ($roomType ?? 'đã chọn') . "'. Vui lòng giảm số lượng hoặc chọn ngày khác.",
+                        ], Response::HTTP_CONFLICT);
+                    }
+
+                    $assignedRooms[] = $room->MaPhong;
+                    $bookingSlots[]  = [
+                        'room'      => $room,
+                        'tong_tien' => round((float) $room->GiaPhong * $totalDays, 2),
+                    ];
+                }
+            }
+
+            $totalAmount = (float) array_sum(array_column($bookingSlots, 'tong_tien'));
+
+            $result = DB::transaction(function () use ($data, $bookingSlots, $totalAmount, $checkIn, $checkOut, $paymentMethod, $isOnline) {
+                $invoice = Invoice::create([
+                    'MaKH'      => $data['ma_kh'],
+                    'NgayTao'   => now()->toDateString(),
+                    'ThanhTien' => $totalAmount,
+                    'TrangThai' => 1,
+                ]);
+
+                foreach ($bookingSlots as $slot) {
+                    RoomBooking::create([
+                        'MaHD'          => $invoice->MaHD,
+                        'MaPhong'       => $slot['room']->MaPhong,
+                        'NgayNhanPhong' => $checkIn,
+                        'NgayTraPhong'  => $checkOut,
+                        'TongTien'      => $slot['tong_tien'],
+                        'TrangThai'     => 1,
+                        'ThanhToan'     => 0,
+                    ]);
+                }
+
+                $invoice      = $invoice->fresh()->load('rooms.room.type');
+                $transferDesc = $this->buildTransferDescription((int) $invoice->MaHD);
+
+                return [
+                    'invoice'              => $invoice,
+                    'payment_method'       => $paymentMethod,
+                    'payment_method_label' => $isOnline ? 'Thanh toán trực tuyến' : 'Thanh toán tại quầy',
+                    'qr_payload'           => $isOnline ? $transferDesc : null,
+                    'qr_code_url'          => $isOnline ? $this->buildVietQrUrl($totalAmount, $transferDesc) : null,
+                    'bank_info'            => $isOnline ? $this->getBankInfo() : null,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'code'    => 'BOOKING_CREATED',
+                'message' => 'Đặt phòng thành công.',
+                'data'    => [
+                    'invoice'              => $this->mapInvoice($result['invoice']),
+                    'payment_method'       => $result['payment_method'],
+                    'payment_method_label' => $result['payment_method_label'],
+                    'qr_payload'           => $result['qr_payload'],
+                    'qr_code_url'          => $result['qr_code_url'],
+                    'bank_info'            => $result['bank_info'] ?? null,
+                ],
+            ], Response::HTTP_CREATED);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'code'    => 'VALIDATION_ERROR',
+                'message' => 'Dữ liệu không hợp lệ.',
+                'errors'  => $e->errors(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'code'    => 'SERVER_ERROR',
+                'message' => 'Có lỗi hệ thống, vui lòng thử lại.',
+                'error'   => $e->getMessage(),
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    public function cancelInvoice(Request $request, int $maHD): JsonResponse
+    {
+        try {
+            $invoice = Invoice::find($maHD);
+            if (!$invoice) {
+                return response()->json(['success' => false, 'message' => 'Không tìm thấy hóa đơn.'], Response::HTTP_NOT_FOUND);
+            }
+            if ((bool) $invoice->ThanhToan) {
+                return response()->json(['success' => false, 'message' => 'Không thể hủy hóa đơn đã thanh toán.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+            DB::transaction(function () use ($invoice) {
+                RoomBooking::where('MaHD', $invoice->MaHD)->where('TrangThai', 1)->delete();
+                $invoice->ThanhTien = 0;
+                $invoice->TrangThai = 0;
+                $invoice->save();
+            });
+            return response()->json(['success' => true, 'message' => 'Hóa đơn đã được hủy.']);
+        } catch (Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'Lỗi hủy hóa đơn: ' . $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private function findMinAvailableRoomExcluding(string $checkIn, string $checkOut, ?string $roomType, ?string $roomVariant, array $excludeRooms = []): ?Room
+    {
+        $query = Room::query()
+            ->with('type')
+            ->availableBetween($checkIn, $checkOut)
+            ->orderBy('MaPhong');
+
+        if (!empty($excludeRooms)) {
+            $query->whereNotIn('MaPhong', $excludeRooms);
+        }
+
+        if ($roomType !== null && trim($roomType) !== '') {
+            $query->whereHas('type', fn($q) => $q->where('TenLoai', trim($roomType)));
+        }
+
+        if ($roomVariant === 'view') {
+            $query->whereRaw('LOWER(TenPhong) LIKE ?', ['%view%']);
+        } elseif ($roomVariant === 'nt') {
+            $query->whereRaw('LOWER(TenPhong) LIKE ?', ['%nt%']);
+        }
+
+        return $query->first();
+    }
 
     private function findMinAvailableRoom(string $checkIn, string $checkOut, ?int $maLoai, ?string $roomType, ?string $roomVariant): ?Room
     {

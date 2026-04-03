@@ -81,15 +81,38 @@ class RoomController extends Controller
             endDate: $data['end_date'],
         )->orderBy('MaPhong')->get();
 
-        // Trả tối đa 2 phòng theo biến thể: 1 NT + 1 View (nếu còn trống)
-        $rooms = collect();
-        $variantGroups = $availableRooms->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
+        $hasTypeFilter = isset($data['ma_loai']) || (isset($data['room_type']) && trim($data['room_type']) !== '');
 
-        foreach (['nt', 'view'] as $variant) {
-            $room = $variantGroups->get($variant)?->first();
-            if ($room) {
-                $rooms->push($room);
+        if ($hasTypeFilter) {
+            // Lọc theo loại: trả 1 NT + 1 View cho loại đó, kèm SoPhongTrong.
+            $rooms = collect();
+            $variantGroups = $availableRooms->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
+            foreach (['nt', 'view'] as $variant) {
+                $group = $variantGroups->get($variant);
+                $room  = $group?->first();
+                if ($room) {
+                    $room->SoPhongTrong = $group->count();
+                    $rooms->push($room);
+                }
             }
+        } else {
+            // Không lọc loại: trả 1 NT + 1 View cho MỖI loại phòng, kèm SoPhongTrong của từng nhóm.
+            $rooms = $availableRooms
+                ->groupBy('MaLoai')
+                ->flatMap(function ($typeGroup) {
+                    $variantGroups = $typeGroup->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
+                    $selected = collect();
+                    foreach (['nt', 'view'] as $variant) {
+                        $group = $variantGroups->get($variant);
+                        $room  = $group?->first();
+                        if ($room) {
+                            $room->SoPhongTrong = $group->count();
+                            $selected->push($room);
+                        }
+                    }
+                    return $selected;
+                })
+                ->values();
         }
 
         return $this->roomListResponse(

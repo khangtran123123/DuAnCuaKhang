@@ -20,10 +20,12 @@ Route::get('tours/departure/{departureScheduleId}/available-rooms', [TourComboCo
 
 // Booking
 Route::post('bookings', [BookingController::class, 'book']);
+Route::post('bookings/multi', [BookingController::class, 'bookMulti']);
 Route::get('bookings/customer/{maKh}', [BookingController::class, 'listByCustomer']);
 Route::post('bookings/{maHD}/rooms/{maPhong}/cancel', [BookingController::class, 'cancelRoomBooking']);
 Route::post('bookings/{maHD}/confirm-payment', [PaymentController::class, 'confirmPayment']);
 Route::get('bookings/{maHD}/payment-status', [PaymentController::class, 'paymentStatus']);
+Route::post('bookings/{maHD}/cancel-invoice', [BookingController::class, 'cancelInvoice']);
 Route::post('webhooks/bank-transfer', [PaymentController::class, 'bankTransferWebhook']);
 
 // Combo Booking (Tour + Room)
