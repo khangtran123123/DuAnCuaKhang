@@ -51,7 +51,7 @@ class Room extends Model
 
         // Ưu tiên host/port từ request hiện tại để khớp môi trường mobile/emulator
         $origin = request()?->getSchemeAndHttpHost() ?: rtrim((string) config('app.url'), '/');
-        return $origin . '/storage/' . ltrim($path, '/');
+        return $origin . '/img/Phong/' . ltrim($path, '/');
     }
 
     public function toArray(): array
