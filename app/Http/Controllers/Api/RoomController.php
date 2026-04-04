@@ -19,7 +19,7 @@ class RoomController extends Controller
         $perType = $data['per_type'] ?? 2;
 
         $rooms = Room::query()
-            ->with('type')
+            ->with('type.images')
             ->orderBy('MaLoai')
             ->orderBy('MaPhong')
             ->get()
@@ -51,17 +51,7 @@ class RoomController extends Controller
 
     private function extractRoomVariant(Room $room): string
     {
-        $name = mb_strtolower(trim((string) $room->TenPhong));
-
-        if (str_contains($name, 'view')) {
-            return 'view';
-        }
-
-        if (str_contains($name, 'nt')) {
-            return 'nt';
-        }
-
-        return 'other';
+        return $room->Variant;
     }
 
     public function searchAvailable(Request $request): JsonResponse
@@ -133,7 +123,7 @@ class RoomController extends Controller
         ?string $endDate = null,
     )
     {
-        $query = Room::query()->with('type');
+        $query = Room::query()->with('type.images');
 
         if ($startDate && $endDate) {
             $query->availableBetween($startDate, $endDate);

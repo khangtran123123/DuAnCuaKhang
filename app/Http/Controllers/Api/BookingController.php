@@ -62,7 +62,7 @@ class BookingController extends Controller
                 $data['ma_phong'] = $assignedRoom->MaPhong;
                 $room = $assignedRoom;
             } else {
-                $room = Room::with('type')->find($data['ma_phong']);
+                $room = Room::with('type.images')->find($data['ma_phong']);
             }
 
             if (!$room || is_null($room->GiaPhong)) {
@@ -117,12 +117,12 @@ class BookingController extends Controller
                     'ThanhToan' => 0,
                 ]);
 
-                $invoice = $invoice->fresh()->load('rooms.room.type');
+                $invoice = $invoice->fresh()->load('rooms.room.type.images');
                 $transferDesc = $this->buildTransferDescription((int) $invoice->MaHD);
 
                 return [
                     'invoice' => $invoice,
-                    'booking' => $roomBooking->load('room.type'),
+                    'booking' => $roomBooking->load('room.type.images'),
                     'pricing' => [
                         'gia_phong' => $roomPrice,
                         'so_ngay_o' => $totalDays,
@@ -274,7 +274,7 @@ class BookingController extends Controller
                     ]);
                 }
 
-                $invoice      = $invoice->fresh()->load('rooms.room.type');
+                $invoice      = $invoice->fresh()->load('rooms.room.type.images');
                 $transferDesc = $this->buildTransferDescription((int) $invoice->MaHD);
 
                 return [
@@ -342,7 +342,7 @@ class BookingController extends Controller
     private function findMinAvailableRoomExcluding(string $checkIn, string $checkOut, ?string $roomType, ?string $roomVariant, array $excludeRooms = []): ?Room
     {
         $query = Room::query()
-            ->with('type')
+            ->with('type.images')
             ->availableBetween($checkIn, $checkOut)
             ->orderBy('MaPhong');
 
@@ -354,11 +354,7 @@ class BookingController extends Controller
             $query->whereHas('type', fn($q) => $q->where('TenLoai', trim($roomType)));
         }
 
-        if ($roomVariant === 'view') {
-            $query->whereRaw('LOWER(TenPhong) LIKE ?', ['%view%']);
-        } elseif ($roomVariant === 'nt') {
-            $query->whereRaw('LOWER(TenPhong) LIKE ?', ['%nt%']);
-        }
+        $query->ofVariant($roomVariant);
 
         return $query->first();
     }
@@ -366,7 +362,7 @@ class BookingController extends Controller
     private function findMinAvailableRoom(string $checkIn, string $checkOut, ?int $maLoai, ?string $roomType, ?string $roomVariant): ?Room
     {
         $query = Room::query()
-            ->with('type')
+            ->with('type.images')
             ->availableBetween($checkIn, $checkOut)
             ->orderBy('MaPhong');
 
@@ -376,11 +372,7 @@ class BookingController extends Controller
             $query->whereHas('type', fn($q) => $q->where('TenLoai', trim($roomType)));
         }
 
-        if ($roomVariant === 'view') {
-            $query->whereRaw('LOWER(TenPhong) LIKE ?', ['%view%']);
-        } elseif ($roomVariant === 'nt') {
-            $query->whereRaw('LOWER(TenPhong) LIKE ?', ['%nt%']);
-        }
+        $query->ofVariant($roomVariant);
 
         return $query->first();
     }
@@ -394,7 +386,7 @@ class BookingController extends Controller
         }
 
         $invoices = $customer->invoices()
-            ->with(['rooms.room.type', 'tourBookings.departureSchedule.tour'])
+            ->with(['rooms.room.type.images', 'tourBookings.departureSchedule.tour.images'])
             ->where(function ($q) {
                 // Chỉ lấy hóa đơn đã thanh toán hoặc còn phòng/tour đang hoạt động.
                 // Loại bỏ hóa đơn TrangThai=0 không còn booking (đã bị hủy).
@@ -484,10 +476,10 @@ class BookingController extends Controller
                 $invoice->update(['ThanhTien' => round($remainingTotal, 2)]);
 
                 return [
-                    'invoice' => $invoice->fresh()->load('rooms.room.type'),
+                    'invoice' => $invoice->fresh()->load('rooms.room.type.images'),
                     'booking' => RoomBooking::where('MaHD', $maHD)
                         ->where('MaPhong', $maPhong)
-                        ->with('room.type')
+                        ->with('room.type.images')
                         ->first(),
                     'invoice_deleted' => false,
                 ];
@@ -563,8 +555,6 @@ class BookingController extends Controller
     private function mapRoomBooking(RoomBooking $roomBooking): array
     {
         $room = $roomBooking->room;
-        $roomType = $room?->type;
-
         return [
             'ma_hd' => (int) $roomBooking->MaHD,
             'ma_phong' => (string) $roomBooking->MaPhong,
@@ -576,19 +566,7 @@ class BookingController extends Controller
             'thanh_toan' => (int) ((bool) $roomBooking->ThanhToan),
             'payment_status' => $roomBooking->ThanhToan ? 'paid' : 'unpaid',
             'payment_status_label' => $roomBooking->ThanhToan ? 'Đã thanh toán' : 'Chưa thanh toán',
-            'room' => $room ? [
-                'MaPhong' => (string) $room->MaPhong,
-                'TenPhong' => $room->TenPhong ?? '',
-                'MaLoai' => (int) ($room->MaLoai ?? 0),
-                'GiaPhong' => (float) ($room->GiaPhong ?? 0),
-                'HinhAnh' => $room->HinhAnh ?? '',
-                'SoLuongNguoi' => (int) ($room->SoLuongNguoi ?? 0),
-                'MoTa' => $room->attributes['MoTa'] ?? '',
-                'TenLoai' => $roomType?->TenLoai ?? '',
-                'type' => [
-                    'TenLoai' => $roomType?->TenLoai ?? '',
-                ],
-            ] : null,
+            'room' => $room ? $room->toArray() : null,
         ];
     }
 }

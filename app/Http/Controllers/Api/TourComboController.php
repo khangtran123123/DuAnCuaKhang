@@ -16,7 +16,7 @@ class TourComboController extends BaseController
     public function index()
     {
         try {
-            $tours = Tour::where('TrangThai', 1)->get();
+            $tours = Tour::with('images')->where('TrangThai', 1)->get();
             return response()->json([
                 'success' => true,
                 'data' => $tours
@@ -39,6 +39,7 @@ class TourComboController extends BaseController
         try {
             // Tìm tour
             $tour = Tour::where('MaTour', $maTour)
+                ->with('images')
                 ->where('TrangThai', 1)
                 ->firstOrFail();
 
@@ -62,7 +63,7 @@ class TourComboController extends BaseController
 
                     // Lấy phòng trống trong khoảng thời gian này
                     $availableRooms = Room::availableBetween($startDate, $endDate)
-                        ->with('type')
+                        ->with('type.images')
                         ->get();
                 }
             }
@@ -103,7 +104,7 @@ class TourComboController extends BaseController
 
             // Lấy phòng trống trong khoảng thời gian này
             $availableRooms = Room::availableBetween($startDate, $endDate)
-                ->with('type')
+                ->with('type.images')
                 ->get();
 
             return response()->json([

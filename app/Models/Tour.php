@@ -2,8 +2,9 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use App\Models\DepartureSchedule;
+use App\Support\MediaUrl;
+use Illuminate\Database\Eloquent\Model;
 
 class Tour extends Model
 {
@@ -43,28 +44,56 @@ class Tour extends Model
         return $this->hasMany(DepartureSchedule::class, 'MaTour', 'MaTour');
     }
 
-    // Trả về URL đầy đủ cho HinhAnh để FE hiển thị được Image.network.
+    public function images()
+    {
+        return $this->hasMany(TourImage::class, 'MaTour', 'MaTour');
+    }
+
     public function getHinhAnhAttribute(): ?string
     {
-        $path = trim((string) ($this->attributes['HinhAnh'] ?? ''));
+        return $this->rawImageUrl() ?? ($this->DanhSachAnh[0] ?? null);
+    }
 
-        if ($path === '') {
-            return null;
-        }
-
-        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-            return $path;
-        }
-
-        $origin = request()?->getSchemeAndHttpHost() ?: rtrim((string) config('app.url'), '/');
-        return $origin . '/storage/' . ltrim($path, '/');
+    public function getDanhSachAnhAttribute(): array
+    {
+        return $this->imageUrls();
     }
 
     public function toArray(): array
     {
         $data = parent::toArray();
+        $gallery = $this->DanhSachAnh;
+
         $data['HinhAnh'] = $this->HinhAnh;
+        $data['DanhSachAnh'] = $gallery;
+        $data['images'] = $gallery;
+
         return $data;
+    }
+
+    private function rawImageUrl(): ?string
+    {
+        return MediaUrl::tourImage($this->attributes['HinhAnh'] ?? null);
+    }
+
+    private function imageUrls(): array
+    {
+        $urls = [];
+        $mainImage = $this->rawImageUrl();
+
+        if ($mainImage !== null) {
+            $urls[] = $mainImage;
+        }
+
+        $images = $this->relationLoaded('images') ? $this->images : $this->images()->get();
+
+        foreach ($images as $image) {
+            if ($image->HinhAnh !== null) {
+                $urls[] = $image->HinhAnh;
+            }
+        }
+
+        return array_values(array_unique(array_filter($urls)));
     }
 
 }

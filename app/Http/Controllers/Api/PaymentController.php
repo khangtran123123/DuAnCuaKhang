@@ -71,7 +71,7 @@ class PaymentController extends Controller
     public function paymentStatus(Request $request, int $maHD): JsonResponse
     {
         try {
-            $invoice = Invoice::with(['rooms.room.type', 'tourBookings.departureSchedule.tour'])->find($maHD);
+            $invoice = Invoice::with(['rooms.room.type.images', 'tourBookings.departureSchedule.tour.images'])->find($maHD);
 
             if (!$invoice) {
                 return response()->json([
@@ -118,7 +118,7 @@ class PaymentController extends Controller
                 ], Response::HTTP_FORBIDDEN);
             }
 
-            $invoice = Invoice::with(['rooms.room.type', 'tourBookings.departureSchedule.tour'])->find($maHD);
+            $invoice = Invoice::with(['rooms.room.type.images', 'tourBookings.departureSchedule.tour.images'])->find($maHD);
 
             if (!$invoice) {
                 return response()->json([
@@ -145,7 +145,7 @@ class PaymentController extends Controller
                 'message' => 'Xác nhận thanh toán thành công.',
                 'data'    => [
                     'invoice' => $this->mapInvoice(
-                        $invoice->fresh()->load(['rooms.room.type', 'tourBookings.departureSchedule.tour'])
+                        $invoice->fresh()->load(['rooms.room.type.images', 'tourBookings.departureSchedule.tour.images'])
                     ),
                 ],
             ]);
@@ -261,7 +261,7 @@ class PaymentController extends Controller
                 ], Response::HTTP_OK);
             }
 
-            $invoice = Invoice::with(['rooms.room.type', 'tourBookings.departureSchedule.tour'])->find($invoiceId);
+            $invoice = Invoice::with(['rooms.room.type.images', 'tourBookings.departureSchedule.tour.images'])->find($invoiceId);
             if (!$invoice) {
                 Log::warning('bank_transfer_webhook_rejected', [
                     'reason'     => 'invoice_not_found',
@@ -310,7 +310,7 @@ class PaymentController extends Controller
 
             $this->confirmInvoicePayment($invoiceId);
 
-            $freshInvoice = Invoice::with(['rooms.room.type', 'tourBookings.departureSchedule.tour'])
+            $freshInvoice = Invoice::with(['rooms.room.type.images', 'tourBookings.departureSchedule.tour.images'])
                 ->findOrFail($invoiceId);
 
             Log::info('bank_transfer_webhook_confirmed', [
@@ -382,8 +382,6 @@ class PaymentController extends Controller
     private function mapRoomBooking(RoomBooking $roomBooking): array
     {
         $room     = $roomBooking->room;
-        $roomType = $room?->type;
-
         return [
             'ma_hd'               => (int) $roomBooking->MaHD,
             'ma_phong'            => (string) $roomBooking->MaPhong,
@@ -395,17 +393,7 @@ class PaymentController extends Controller
             'thanh_toan'          => (int) ((bool) $roomBooking->ThanhToan),
             'payment_status'      => $roomBooking->ThanhToan ? 'paid' : 'unpaid',
             'payment_status_label'=> $roomBooking->ThanhToan ? 'Đã thanh toán' : 'Chưa thanh toán',
-            'room' => $room ? [
-                'MaPhong'      => (string) $room->MaPhong,
-                'TenPhong'     => $room->TenPhong ?? '',
-                'MaLoai'       => (int) ($room->MaLoai ?? 0),
-                'GiaPhong'     => (float) ($room->GiaPhong ?? 0),
-                'HinhAnh'      => $room->HinhAnh ?? '',
-                'SoLuongNguoi' => (int) ($room->SoLuongNguoi ?? 0),
-                'MoTa'         => $room->attributes['MoTa'] ?? '',
-                'TenLoai'      => $roomType?->TenLoai ?? '',
-                'type'         => ['TenLoai' => $roomType?->TenLoai ?? ''],
-            ] : null,
+            'room' => $room ? $room->toArray() : null,
         ];
     }
 
@@ -432,6 +420,8 @@ class PaymentController extends Controller
                 'ma_tour'            => (string) $tour->MaTour,
                 'ten_tour'           => (string) ($tour->TenTour ?? ''),
                 'dia_diem_khoi_hanh' => (string) ($tour->DiaDiemKhoiHanh ?? ''),
+                'HinhAnh'            => $tour->HinhAnh,
+                'DanhSachAnh'        => $tour->DanhSachAnh,
             ] : null,
         ];
     }

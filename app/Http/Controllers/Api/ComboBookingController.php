@@ -58,7 +58,7 @@ class ComboBookingController extends Controller
                 ], Response::HTTP_NOT_FOUND);
             }
 
-            $room = Room::with('type')->find($data['ma_phong']);
+            $room = Room::with('type.images')->find($data['ma_phong']);
             if (!$room || is_null($room->GiaPhong)) {
                 return response()->json([
                     'success' => false,
@@ -140,7 +140,7 @@ class ComboBookingController extends Controller
 
                 return [
                     'invoice'      => $invoice->fresh(),
-                    'room_booking' => $roomBooking->load('room.type'),
+                    'room_booking' => $roomBooking->load('room.type.images'),
                     'pricing'      => [
                         'tien_tour'    => $tourTotal,
                         'tien_phong'   => $roomTotal,
@@ -215,7 +215,7 @@ class ComboBookingController extends Controller
                 TourBooking::where('MaHD', $maHD)->delete();
                 // Không xóa hóa đơn để giữ nguyên chuỗi tăng tự động,
                 // chỉ đặt trạng thái = 0 (chưa thanh toán / đã hủy).
-                $invoice->ThanhTien = 0;
+                $invoice->ThanhTien = null;
                 $invoice->TrangThai = 0;
                 $invoice->save();
             });
@@ -258,6 +258,7 @@ class ComboBookingController extends Controller
             'tong_tien'       => (float) $rb->TongTien,
             'trang_thai'      => (int) $rb->TrangThai,
             'thanh_toan'      => (int) $rb->ThanhToan,
+            'room'            => $rb->relationLoaded('room') && $rb->room ? $rb->room->toArray() : null,
         ];
     }
 }

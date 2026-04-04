@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 class Room extends Model
@@ -12,54 +13,72 @@ class Room extends Model
 
     public $timestamps = false;
 
-    // MaPhong is VARCHAR(10)
-    public $incrementing = false;
-    protected $keyType = 'string';
-
     protected $fillable = [
         'TenPhong',
-        'GiaPhong',
-        'SoLuongNguoi',
-        'HinhAnh',
-        'MoTa',
         'MaLoai',
     ];
 
     protected $casts = [
-        'GiaPhong' => 'decimal:2',
-        'SoLuongNguoi' => 'integer',
+        'MaLoai' => 'integer',
     ];
 
     public function type()
     {
-        return $this->belongsTo(RoomType::class, 'MaLoai');
+        return $this->belongsTo(RoomType::class, 'MaLoai', 'MaLoai');
     }
 
-    // Trả về URL đầy đủ cho HinhAnh thay vì tên file thô
+    public function getGiaPhongAttribute(): ?float
+    {
+        $price = $this->type?->GiaPhong;
+
+        return is_null($price) ? null : (float) $price;
+    }
+
+    public function getSoLuongNguoiAttribute(): ?int
+    {
+        $capacity = $this->type?->SoLuongNguoi;
+
+        return is_null($capacity) ? null : (int) $capacity;
+    }
+
+    public function getMoTaAttribute(): ?string
+    {
+        return $this->type?->MoTa;
+    }
+
+    public function getTenLoaiAttribute(): ?string
+    {
+        return $this->type?->TenLoai;
+    }
+
     public function getHinhAnhAttribute(): ?string
     {
-        $path = trim((string) ($this->attributes['HinhAnh'] ?? ''));
+        return $this->type?->HinhAnh;
+    }
 
-        if ($path === '') {
-            return null;
-        }
+    public function getDanhSachAnhAttribute(): array
+    {
+        return $this->type?->DanhSachAnh ?? [];
+    }
 
-        // Nếu DB đã lưu URL đầy đủ thì giữ nguyên
-        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-            return $path;
-        }
-
-        // Ưu tiên host/port từ request hiện tại để khớp môi trường mobile/emulator
-        $origin = request()?->getSchemeAndHttpHost() ?: rtrim((string) config('app.url'), '/');
-        return $origin . '/img/Phong/' . ltrim($path, '/');
+    public function getVariantAttribute(): string
+    {
+        return self::inferVariantFromName($this->TenLoai);
     }
 
     public function toArray(): array
     {
         $data = parent::toArray();
+        $gallery = $this->DanhSachAnh;
 
-        // Bảo đảm JSON API luôn trả URL ảnh đầy đủ thay vì tên file thô.
+        $data['GiaPhong'] = $this->GiaPhong;
+        $data['SoLuongNguoi'] = $this->SoLuongNguoi;
+        $data['MoTa'] = $this->MoTa;
+        $data['TenLoai'] = $this->TenLoai;
         $data['HinhAnh'] = $this->HinhAnh;
+        $data['DanhSachAnh'] = $gallery;
+        $data['images'] = $gallery;
+        $data['variant'] = $this->Variant;
 
         return $data;
     }
@@ -67,6 +86,25 @@ class Room extends Model
     public function bookings()
     {
         return $this->hasMany(RoomBooking::class, 'MaPhong');
+    }
+
+    public function scopeOfVariant(Builder $query, ?string $variant)
+    {
+        $normalized = strtolower(trim((string) $variant));
+
+        if ($normalized === 'view') {
+            return $query->whereHas('type', function ($typeQuery) {
+                $typeQuery->whereRaw('LOWER(TenLoai) LIKE ?', ['%view%']);
+            });
+        }
+
+        if ($normalized === 'nt') {
+            return $query->whereHas('type', function ($typeQuery) {
+                $typeQuery->whereRaw('LOWER(TenLoai) NOT LIKE ?', ['%view%']);
+            });
+        }
+
+        return $query;
     }
 
     public function scopeAvailableBetween($query, string $from, string $to)
@@ -84,5 +122,16 @@ class Room extends Model
                         });
                 });
         });
+    }
+
+    public static function inferVariantFromName(?string $name): string
+    {
+        $normalized = mb_strtolower(trim((string) $name));
+
+        if ($normalized === '') {
+            return 'other';
+        }
+
+        return str_contains($normalized, 'view') ? 'view' : 'nt';
     }
 }
