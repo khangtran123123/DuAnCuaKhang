@@ -38,6 +38,7 @@ class ComboBookingController extends Controller
 
             $paymentMethod   = $data['payment_method'] ?? 'counter';
             $isOnlinePayment = $paymentMethod === 'online';
+            $totalGuests     = (int) $data['so_nguoi_lon'] + (int) $data['so_tre_em'];
 
             // Lấy lịch khởi hành kèm tour (để lấy giá)
             $schedule = DepartureSchedule::with('tour')->find($data['ma_lkh']);
@@ -47,6 +48,22 @@ class ComboBookingController extends Controller
                     'code'    => 'SCHEDULE_NOT_FOUND',
                     'message' => 'Không tìm thấy lịch khởi hành.',
                 ], Response::HTTP_NOT_FOUND);
+            }
+
+            if (Carbon::parse($schedule->NgayKhoiHanh)->startOfDay()->lt(Carbon::today())) {
+                return response()->json([
+                    'success' => false,
+                    'code'    => 'SCHEDULE_EXPIRED',
+                    'message' => 'Lịch khởi hành này đã qua. Vui lòng chọn lịch khác.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+
+            if ((int) $schedule->SoChoConLai < $totalGuests) {
+                return response()->json([
+                    'success' => false,
+                    'code'    => 'NOT_ENOUGH_SEATS',
+                    'message' => 'Số chỗ còn lại của lịch khởi hành không đủ cho số khách đã chọn.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
             }
 
             $tour = $schedule->tour;
@@ -104,8 +121,21 @@ class ComboBookingController extends Controller
             $result = DB::transaction(function () use (
                 $data, $checkIn, $checkOut, $nights,
                 $tourTotal, $roomTotal, $comboTotal,
-                $paymentMethod, $isOnlinePayment
+                $paymentMethod, $isOnlinePayment, $totalGuests
             ) {
+                $lockedSchedule = DepartureSchedule::query()
+                    ->whereKey($data['ma_lkh'])
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if (Carbon::parse($lockedSchedule->NgayKhoiHanh)->startOfDay()->lt(Carbon::today())) {
+                    abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'Lịch khởi hành này đã qua. Vui lòng chọn lịch khác.');
+                }
+
+                if ((int) $lockedSchedule->SoChoConLai < $totalGuests) {
+                    abort(Response::HTTP_UNPROCESSABLE_ENTITY, 'Số chỗ còn lại của lịch khởi hành không đủ cho số khách đã chọn.');
+                }
+
                 // Tạo hóa đơn
                 $invoice = Invoice::create([
                     'MaKH'     => $data['ma_kh'],
@@ -135,6 +165,8 @@ class ComboBookingController extends Controller
                     'TrangThai'  => 1,
                     'ThanhToan'  => 0,
                 ]);
+
+                $lockedSchedule->decrement('SoChoConLai', $totalGuests);
 
                 $transferDesc = $this->buildTransferDescription((int) $invoice->MaHD);
 
@@ -177,6 +209,12 @@ class ComboBookingController extends Controller
                 'message' => 'Dữ liệu không hợp lệ.',
                 'errors'  => $e->errors(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            return response()->json([
+                'success' => false,
+                'code'    => 'COMBO_BOOKING_REJECTED',
+                'message' => $e->getMessage() !== '' ? $e->getMessage() : 'Không thể đặt combo với lịch đã chọn.',
+            ], $e->getStatusCode() ?: Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (Throwable $e) {
             return response()->json([
                 'success' => false,
@@ -211,6 +249,20 @@ class ComboBookingController extends Controller
             }
 
             DB::transaction(function () use ($maHD, $invoice) {
+                $seatRestoreBySchedule = TourBooking::query()
+                    ->where('MaHD', $maHD)
+                    ->get()
+                    ->groupBy('MaLKH')
+                    ->map(fn ($bookings) => $bookings->sum(function ($booking) {
+                        return (int) $booking->SoNguoiLon + (int) $booking->SoTreEm;
+                    }));
+
+                foreach ($seatRestoreBySchedule as $maLKH => $seatCount) {
+                    if ($seatCount > 0) {
+                        DepartureSchedule::where('MaLKH', $maLKH)->increment('SoChoConLai', (int) $seatCount);
+                    }
+                }
+
                 RoomBooking::where('MaHD', $maHD)->delete();
                 TourBooking::where('MaHD', $maHD)->delete();
                 // Không xóa hóa đơn để giữ nguyên chuỗi tăng tự động,

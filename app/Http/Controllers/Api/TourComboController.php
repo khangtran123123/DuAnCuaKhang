@@ -37,6 +37,8 @@ class TourComboController extends BaseController
     public function getTourWithRooms($maTour)
     {
         try {
+            $today = Carbon::today()->toDateString();
+
             // Tìm tour
             $tour = Tour::where('MaTour', $maTour)
                 ->with('images')
@@ -45,7 +47,8 @@ class TourComboController extends BaseController
 
             // Lấy tất cả lịch khởi hành của tour này
             $departureSchedules = DepartureSchedule::where('MaTour', $maTour)
-                ->where('NgayKhoiHanh', '>=', now()->format('Y-m-d'))
+                ->whereDate('NgayKhoiHanh', '>=', $today)
+                ->where('SoChoConLai', '>', 0)
                 ->orderBy('NgayKhoiHanh', 'asc')
                 ->get();
 
@@ -55,7 +58,10 @@ class TourComboController extends BaseController
 
             if (request()->has('departureScheduleId')) {
                 $scheduleId = request()->input('departureScheduleId');
-                $selectedSchedule = DepartureSchedule::find($scheduleId);
+                $selectedSchedule = DepartureSchedule::whereKey($scheduleId)
+                    ->whereDate('NgayKhoiHanh', '>=', $today)
+                    ->where('SoChoConLai', '>', 0)
+                    ->first();
 
                 if ($selectedSchedule) {
                     $startDate = Carbon::parse((string) $selectedSchedule->NgayKhoiHanh)->format('Y-m-d');
@@ -97,7 +103,10 @@ class TourComboController extends BaseController
     public function getAvailableRoomsForSchedule($departureScheduleId)
     {
         try {
-            $schedule = DepartureSchedule::findOrFail($departureScheduleId);
+            $schedule = DepartureSchedule::whereKey($departureScheduleId)
+                ->whereDate('NgayKhoiHanh', '>=', Carbon::today()->toDateString())
+                ->where('SoChoConLai', '>', 0)
+                ->firstOrFail();
 
             $startDate = Carbon::parse((string) $schedule->NgayKhoiHanh)->format('Y-m-d');
             $endDate = Carbon::parse((string) $schedule->NgayKetThuc)->format('Y-m-d');
