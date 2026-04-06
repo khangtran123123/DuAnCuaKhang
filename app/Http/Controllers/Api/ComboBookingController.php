@@ -111,7 +111,7 @@ class ComboBookingController extends Controller
                     'MaKH'     => $data['ma_kh'],
                     'NgayTao'  => now()->toDateString(),
                     'ThanhTien'=> $comboTotal,
-                    'TrangThai'=> 0,
+                    'TrangThai'=> 1,
                 ]);
 
                 // Tạo chi tiết phòng
