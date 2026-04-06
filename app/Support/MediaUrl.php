@@ -56,7 +56,11 @@ class MediaUrl
         $normalized = ltrim(str_replace('\\', '/', $normalized), '/');
 
         if (str_contains($normalized, '/')) {
-            return self::absolute('img/Tour/' . $normalized);
+            $relativePath = 'img/Tour/' . $normalized;
+
+            return self::publicAssetExists($relativePath)
+                ? self::absolute($relativePath)
+                : null;
         }
 
         $folder = self::detectTourFolder($normalized);
@@ -66,9 +70,15 @@ class MediaUrl
             return self::absolute($rootRelativePath);
         }
 
-        $relativePath = $folder !== null
-            ? 'img/Tour/' . $folder . '/' . $normalized
-            : $rootRelativePath;
+        if ($folder === null) {
+            return null;
+        }
+
+        $relativePath = 'img/Tour/' . $folder . '/' . $normalized;
+
+        if (!self::publicAssetExists($relativePath)) {
+            return null;
+        }
 
         return self::absolute($relativePath);
     }
