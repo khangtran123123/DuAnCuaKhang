@@ -7,6 +7,7 @@ use App\Models\Room;
 use App\Models\RoomType;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Collection;
 
 class RoomController extends Controller
 {
@@ -16,7 +17,7 @@ class RoomController extends Controller
             'per_type' => ['nullable', 'integer', 'min:1', 'max:10'],
         ]);
 
-        $perType = $data['per_type'] ?? 2;
+        $perType = $data['per_type'] ?? 1;
 
         $rooms = Room::query()
             ->with('type.images')
@@ -25,24 +26,10 @@ class RoomController extends Controller
             ->get()
             ->groupBy('MaLoai')
             ->flatMap(function ($group) use ($perType) {
-                $variantGroups = $group->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
-
-                $selected = collect();
-
-                foreach (['nt', 'view'] as $variant) {
-                    if ($selected->count() >= $perType) break;
-                    $room = $variantGroups->get($variant)?->first();
-                    if ($room) $selected->push($room);
-                }
-
-                if ($selected->count() < $perType) {
-                    $remaining = $group
-                        ->reject(fn(Room $room) => $selected->contains('MaPhong', $room->MaPhong))
-                        ->take($perType - $selected->count());
-                    $selected = $selected->merge($remaining);
-                }
-
-                return $selected;
+                return collect([$this->pickRepresentativeRoom($group)])
+                    ->filter()
+                    ->take($perType)
+                    ->values();
             })
             ->values();
 
@@ -52,6 +39,24 @@ class RoomController extends Controller
     private function extractRoomVariant(Room $room): string
     {
         return $room->Variant;
+    }
+
+    private function pickRepresentativeRoom(Collection $rooms): ?Room
+    {
+        if ($rooms->isEmpty()) {
+            return null;
+        }
+
+        $variantGroups = $rooms->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
+
+        foreach (['nt', 'view', 'other'] as $variant) {
+            $room = $variantGroups->get($variant)?->first();
+            if ($room) {
+                return $room;
+            }
+        }
+
+        return $rooms->first();
     }
 
     public function searchAvailable(Request $request): JsonResponse
@@ -74,33 +79,25 @@ class RoomController extends Controller
         $hasTypeFilter = isset($data['ma_loai']) || (isset($data['room_type']) && trim($data['room_type']) !== '');
 
         if ($hasTypeFilter) {
-            // Lọc theo loại: trả 1 NT + 1 View cho loại đó, kèm SoPhongTrong.
+            // Lọc theo loại: trả 1 phòng đại diện cho loại đó, kèm tổng số phòng trống cùng loại.
             $rooms = collect();
-            $variantGroups = $availableRooms->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
-            foreach (['nt', 'view'] as $variant) {
-                $group = $variantGroups->get($variant);
-                $room  = $group?->first();
-                if ($room) {
-                    $room->SoPhongTrong = $group->count();
-                    $rooms->push($room);
-                }
+            $room = $this->pickRepresentativeRoom($availableRooms);
+            if ($room) {
+                $room->SoPhongTrong = $availableRooms->count();
+                $rooms->push($room);
             }
         } else {
-            // Không lọc loại: trả 1 NT + 1 View cho MỖI loại phòng, kèm SoPhongTrong của từng nhóm.
+            // Không lọc loại: trả 1 phòng đại diện cho MỖI loại phòng, kèm SoPhongTrong của từng nhóm.
             $rooms = $availableRooms
                 ->groupBy('MaLoai')
                 ->flatMap(function ($typeGroup) {
-                    $variantGroups = $typeGroup->groupBy(fn(Room $room) => $this->extractRoomVariant($room));
-                    $selected = collect();
-                    foreach (['nt', 'view'] as $variant) {
-                        $group = $variantGroups->get($variant);
-                        $room  = $group?->first();
-                        if ($room) {
-                            $room->SoPhongTrong = $group->count();
-                            $selected->push($room);
-                        }
+                    $room = $this->pickRepresentativeRoom($typeGroup);
+                    if ($room) {
+                        $room->SoPhongTrong = $typeGroup->count();
+                        return collect([$room]);
                     }
-                    return $selected;
+
+                    return collect();
                 })
                 ->values();
         }

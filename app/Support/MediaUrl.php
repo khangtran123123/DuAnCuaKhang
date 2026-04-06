@@ -53,17 +53,31 @@ class MediaUrl
             return $normalized;
         }
 
+        $normalized = ltrim(str_replace('\\', '/', $normalized), '/');
+
+        if (str_contains($normalized, '/')) {
+            return self::absolute('img/Tour/' . $normalized);
+        }
+
         $folder = self::detectTourFolder($normalized);
 
-        if ($folder === null && !str_contains($normalized, '/')) {
-            return null;
+        $rootRelativePath = 'img/Tour/' . $normalized;
+        if (self::publicAssetExists($rootRelativePath)) {
+            return self::absolute($rootRelativePath);
         }
 
         $relativePath = $folder !== null
-            ? 'img/Tour/' . $folder . '/' . ltrim($normalized, '/')
-            : 'img/Tour/' . ltrim($normalized, '/');
+            ? 'img/Tour/' . $folder . '/' . $normalized
+            : $rootRelativePath;
 
         return self::absolute($relativePath);
+    }
+
+    private static function publicAssetExists(string $relativePath): bool
+    {
+        $fullPath = public_path(str_replace('/', DIRECTORY_SEPARATOR, ltrim($relativePath, '/')));
+
+        return is_file($fullPath);
     }
 
     private static function detectRoomFolder(string $filename): ?string
