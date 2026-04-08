@@ -91,16 +91,7 @@ class ComboBookingController extends Controller
             // Kiểm tra xung đột phòng
             $conflict = RoomBooking::where('MaPhong', $data['ma_phong'])
                 ->where('TrangThai', 1)
-                ->where(function ($q) use ($checkIn, $checkOut) {
-                    $checkInStr  = $checkIn->toDateString();
-                    $checkOutStr = $checkOut->toDateString();
-                    $q->whereBetween('NgayNhanPhong', [$checkInStr, $checkOutStr])
-                      ->orWhereBetween('NgayTraPhong', [$checkInStr, $checkOutStr])
-                      ->orWhere(function ($sub) use ($checkInStr, $checkOutStr) {
-                          $sub->where('NgayNhanPhong', '<', $checkInStr)
-                              ->where('NgayTraPhong', '>', $checkOutStr);
-                      });
-                })
+                ->overlappingRange($checkIn->toDateString(), $checkOut->toDateString())
                 ->exists();
 
             if ($conflict) {

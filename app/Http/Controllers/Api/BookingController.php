@@ -81,14 +81,7 @@ class BookingController extends Controller
 
             $conflict = RoomBooking::where('MaPhong', $data['ma_phong'])
                 ->where('TrangThai', 1)
-                ->where(function ($q) use ($data) {
-                    $q->whereBetween('NgayNhanPhong', [$data['ngay_nhan_phong'], $data['ngay_tra_phong']])
-                        ->orWhereBetween('NgayTraPhong', [$data['ngay_nhan_phong'], $data['ngay_tra_phong']])
-                        ->orWhere(function ($sub) use ($data) {
-                            $sub->where('NgayNhanPhong', '<', $data['ngay_nhan_phong'])
-                                ->where('NgayTraPhong', '>', $data['ngay_tra_phong']);
-                        });
-                })
+                ->overlappingRange($data['ngay_nhan_phong'], $data['ngay_tra_phong'])
                 ->exists();
 
             if ($conflict) {

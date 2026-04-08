@@ -40,6 +40,13 @@ class RoomBooking extends Model
         return $this->belongsTo(Room::class, 'MaPhong');
     }
 
+    public function scopeOverlappingRange(Builder $query, string $checkIn, string $checkOut): Builder
+    {
+        return $query
+            ->where('NgayNhanPhong', '<', $checkOut)
+            ->where('NgayTraPhong', '>', $checkIn);
+    }
+
     public function getKeyName(): array
     {
         return $this->primaryKey;

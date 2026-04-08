@@ -113,14 +113,8 @@ class Room extends Model
             $sub->select('MaPhong')
                 ->from('tbl_HDPhong')
                 ->where('TrangThai', 1)
-                ->where(function ($q) use ($from, $to) {
-                    $q->whereBetween('NgayNhanPhong', [$from, $to])
-                        ->orWhereBetween('NgayTraPhong', [$from, $to])
-                        ->orWhere(function ($q2) use ($from, $to) {
-                            $q2->where('NgayNhanPhong', '<', $from)
-                                ->where('NgayTraPhong', '>', $to);
-                        });
-                });
+                ->where('NgayNhanPhong', '<', $to)
+                ->where('NgayTraPhong', '>', $from);
         });
     }
 
