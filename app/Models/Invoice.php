@@ -40,11 +40,6 @@ class Invoice extends Model
         return $this->hasMany(RoomBooking::class, 'MaHD');
     }
 
-    public function serviceBookings()
-    {
-        return $this->hasMany(ServiceBooking::class, 'MaHD');
-    }
-
     public function tourBookings()
     {
         return $this->hasMany(TourBooking::class, 'MaHD');
